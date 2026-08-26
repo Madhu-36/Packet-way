@@ -107,19 +107,26 @@ function getVehicleType(sizeBytes) {
 }
 
 /** Perform GeoIP lookup on a foreign (non-local) IP. */
+const geoCache = new Map();
 function lookupGeo(ip) {
   if (!geoip) return null;
   // Skip private / local ranges
   if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.)/.test(ip)) return null;
+  if (geoCache.has(ip)) return geoCache.get(ip);
   const result = geoip.lookup(ip);
-  if (!result) return null;
-  return {
-    country: result.country || '??',
-    city   : result.city || '',
-    region : result.region || '',
-    ll     : result.ll || null,
-    flag   : countryToFlag(result.country),
-  };
+  let res = null;
+  if (result) {
+    res = {
+      country: result.country || '??',
+      city   : result.city || '',
+      region : result.region || '',
+      ll     : result.ll || null,
+      flag   : countryToFlag(result.country),
+    };
+  }
+  if (geoCache.size > 5000) geoCache.clear();
+  geoCache.set(ip, res);
+  return res;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -234,10 +241,16 @@ function startLiveCapture() {
   const buffer  = Buffer.alloc(65535);
   const capInst = new Cap();
 
-  // Rate limiter: max 200 emits/sec to keep frontend responsive
-  let emitCount   = 0;
-  let lastWindow  = Date.now();
-  const MAX_PER_SEC = 200;
+  // Packet buffering to reduce Socket.io emit overhead
+  let packetBuffer = [];
+  let packetIdCounter = 0;
+  
+  setInterval(() => {
+    if (packetBuffer.length > 0) {
+      io.emit('packets', packetBuffer);
+      packetBuffer = [];
+    }
+  }, 100);
 
   try {
     const linkType = capInst.open(deviceName, 'ip', 10 * 1024 * 1024, buffer);
@@ -256,11 +269,10 @@ function startLiveCapture() {
 
     // ── Packet handler ────────────────────────────────────────
     capInst.on('packet', (nbytes) => {
-      // Rate-limit window
-      const now = Date.now();
-      if (now - lastWindow >= 1000) { emitCount = 0; lastWindow = now; }
-      if (emitCount >= MAX_PER_SEC) return;
+      // Avoid accumulating too many packets in a single interval if flooded
+      if (packetBuffer.length > 500) return;
 
+      const now = Date.now();
       try {
         let srcIP, dstIP, srcPort = null, dstPort = null;
         let protocol = 'OTHER';
@@ -339,8 +351,8 @@ function startLiveCapture() {
 
         captureState.packetsTotal++;
 
-        io.emit('packet', {
-          id         : crypto.randomUUID(),
+        packetBuffer.push({
+          id         : (packetIdCounter++).toString(),
           direction,
           src,
           dst,
@@ -359,8 +371,6 @@ function startLiveCapture() {
           seqNo,
           ackNo
         });
-
-        emitCount++;
       } catch (_) { /* skip malformed packets */ }
     });
 
