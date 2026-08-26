@@ -59,10 +59,10 @@ function createVehicle(pkt, cw, ch) {
   const w = Math.floor(Math.random() * (cfg.w[1] - cfg.w[0]) + cfg.w[0]);
   const h = Math.floor(Math.random() * (cfg.h[1] - cfg.h[0]) + cfg.h[0]);
   
+  // Outbound drives Left-to-Right, Inbound drives Right-to-Left
   const isOut = pkt.direction === 'OUTBOUND';
-  // X: Inbound starts at left (-w - 100), Outbound starts at right (cw + 100)
-  const x = isOut ? cw + 100 : -w - 100;
-  const speed = (Math.random() * (cfg.spd[1] - cfg.spd[0]) + cfg.spd[0]) * (isOut ? -1 : 1);
+  const x = isOut ? -w - 100 : cw + 100;
+  const speed = (Math.random() * (cfg.spd[1] - cfg.spd[0]) + cfg.spd[0]) * (isOut ? 1 : -1);
   
   // Y: Lanes
   const halfH = ch / 2;
@@ -73,15 +73,17 @@ function createVehicle(pkt, cw, ch) {
     : laneIdx * laneH + (laneH / 2) - (h / 2);
   
   const protocol = pkt.protocol || 'OTHER';
-  const color = PROTO_PAINT[protocol]?.base || PROTO_PAINT.OTHER.base || '#ffffff';
+  const color = PROTO_COLOR[protocol] || PROTO_COLOR.OTHER;
   const glow = PROTO_GLOW[protocol] || PROTO_GLOW.OTHER;
 
   return {
     uid: pkt.uid || pkt.id,
     type, x, y, w, h, speed,
+    baseSpeed: speed, laneIdx, targetY: y,
     color: color, glowColor: glow,
     protocol, size: pkt.size, isInbound: !isOut,
-    srcIP: pkt.srcIP, dstIP: pkt.dstIP, srcPort: pkt.srcPort, dstPort: pkt.dstPort, geo: pkt.geo
+    srcIP: pkt.srcIP, dstIP: pkt.dstIP, srcPort: pkt.srcPort, dstPort: pkt.dstPort, geo: pkt.geo,
+    ttl: pkt.ttl, tcpFlags: pkt.tcpFlags, tcpWindow: pkt.tcpWindow, seqNo: pkt.seqNo, ackNo: pkt.ackNo
   };
 }
 
@@ -131,10 +133,10 @@ function drawRoad(ctx, w, h) {
   ctx.font = 'bold 14px "Share Tech Mono", monospace';
   ctx.fillStyle = '#3b82f60a';
   ctx.textAlign = 'left';
-  ctx.fillText('▶  INBOUND  ·  TCP  ·  UDP  ·  ICMP', 16, laneH * 0.55);
+  ctx.fillText('◀  INBOUND  ·  TCP  ·  UDP  ·  ICMP', 16, laneH * 0.55);
   ctx.textAlign = 'right';
   ctx.fillStyle = '#ff33550a';
-  ctx.fillText('OUTBOUND  ·  TCP  ·  UDP  ·  ICMP  ◀', w - 16, halfH + laneH * 0.55);
+  ctx.fillText('OUTBOUND  ·  TCP  ·  UDP  ·  ICMP  ▶', w - 16, halfH + laneH * 0.55);
   ctx.restore();
 }
 // ═════════════════════════════════════════════════════════════════════
@@ -143,67 +145,131 @@ function drawRoad(ctx, w, h) {
 
 // ── CYCLE (0-64 B) ─────────────────
 function drawCycle(ctx, v) {
-  const { x, y, w, h, color, isInbound } = v;
-  ctx.fillStyle = color;
+  const { x, y, w, h, isInbound, protocol } = v;
+  const paint = PROTO_PAINT[protocol] || PROTO_PAINT.OTHER;
+  
+  // Rider and bike frame
+  ctx.fillStyle = paint.d;
   ctx.beginPath();
-  ctx.roundRect(x + w * 0.2, y + h * 0.3, w * 0.6, h * 0.4, 2);
+  ctx.roundRect(x + w * 0.2, y + h * 0.2, w * 0.6, h * 0.6, 4);
   ctx.fill();
-  ctx.fillStyle = '#222';
-  ctx.beginPath(); ctx.arc(isInbound ? x + w - 4 : x + 4, y + h/2, 3, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(isInbound ? x + 4 : x + w - 4, y + h/2, 3, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(isInbound ? x + w - 2 : x, y + h/2 - 1, 2, 2);
+  
+  // Helmet
+  ctx.fillStyle = paint.l;
+  ctx.beginPath();
+  ctx.arc(x + w / 2, y + h / 2, h * 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Wheels
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.roundRect(!isInbound ? x + w - 4 : x + 2, y + h / 2 - 2, 4, 4, 1); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(!isInbound ? x + 2 : x + w - 4, y + h / 2 - 2, 4, 4, 1); ctx.fill();
 }
 
 // ── CAR (65-512 B) ─────────────────
 function drawCar(ctx, v) {
-  const { x, y, w, h, color, isInbound } = v;
-  ctx.fillStyle = color;
+  const { x, y, w, h, isInbound, protocol } = v;
+  const paint = PROTO_PAINT[protocol] || PROTO_PAINT.OTHER;
+  
+  // Main body
+  const grad = ctx.createLinearGradient(x, y, x, y + h);
+  grad.addColorStop(0, paint.d); grad.addColorStop(0.5, paint.m); grad.addColorStop(1, paint.d);
+  ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.roundRect(x, y + 2, w, h - 4, 4);
+  ctx.roundRect(x, y + 2, w, h - 4, 6);
   ctx.fill();
-  ctx.fillStyle = '#111';
-  const rx = isInbound ? x + w * 0.2 : x + w * 0.6;
-  ctx.fillRect(rx, y + 4, w * 0.2, h - 8);
+
+  // Roof
+  ctx.fillStyle = paint.roof;
+  ctx.beginPath();
+  ctx.roundRect(x + w * 0.25, y + 4, w * 0.45, h - 8, 3);
+  ctx.fill();
+  
+  // Windshields (dark glass)
+  ctx.fillStyle = '#111928';
+  // Front Windshield
+  const frontX = !isInbound ? x + w * 0.7 : x + w * 0.15;
+  ctx.beginPath(); ctx.roundRect(frontX, y + 4, w * 0.15, h - 8, 2); ctx.fill();
+  // Rear Window
+  const rearX = !isInbound ? x + w * 0.15 : x + w * 0.7;
+  ctx.beginPath(); ctx.roundRect(rearX, y + 5, w * 0.12, h - 10, 2); ctx.fill();
+
+  // Headlights
+  ctx.fillStyle = '#ffffe0';
+  const hx = !isInbound ? x + w - 2 : x;
+  ctx.fillRect(hx, y + 4, 2, 3);
+  ctx.fillRect(hx, y + h - 7, 2, 3);
+  
+  // Taillights
+  ctx.fillStyle = '#ff3333';
+  const tx = !isInbound ? x : x + w - 2;
+  ctx.fillRect(tx, y + 4, 2, 3);
+  ctx.fillRect(tx, y + h - 7, 2, 3);
 }
 
 // ── TRUCK (513-1024 B) ─────────────────
 function drawTruck(ctx, v) {
-  const { x, y, w, h, color, isInbound } = v;
+  const { x, y, w, h, isInbound, protocol } = v;
+  const paint = PROTO_PAINT[protocol] || PROTO_PAINT.OTHER;
+  
   const cabW = w * 0.25;
   const cargoW = w - cabW - 2;
-  const cabX = isInbound ? x + cargoW + 2 : x;
-  const cargoX = isInbound ? x : x + cabW + 2;
+  const cabX = !isInbound ? x + cargoW + 2 : x;
+  const cargoX = !isInbound ? x : x + cabW + 2;
   
-  ctx.fillStyle = color;
-  ctx.beginPath(); ctx.roundRect(cabX, y + 2, cabW, h - 4, 3); ctx.fill();
-  
-  ctx.fillStyle = '#555';
+  // Cargo Trailer (Realistic white/grey)
+  const cGrad = ctx.createLinearGradient(0, y, 0, y + h);
+  cGrad.addColorStop(0, '#d1d5db'); cGrad.addColorStop(0.5, '#f3f4f6'); cGrad.addColorStop(1, '#9ca3af');
+  ctx.fillStyle = cGrad;
   ctx.beginPath(); ctx.roundRect(cargoX, y, cargoW, h, 2); ctx.fill();
+  
+  // Cab
+  const cabGrad = ctx.createLinearGradient(0, y, 0, y + h);
+  cabGrad.addColorStop(0, paint.d); cabGrad.addColorStop(0.5, paint.m); cabGrad.addColorStop(1, paint.d);
+  ctx.fillStyle = cabGrad;
+  ctx.beginPath(); ctx.roundRect(cabX, y + 2, cabW, h - 4, 4); ctx.fill();
+  
+  // Cab Windshield
+  ctx.fillStyle = '#111928';
+  const glassX = !isInbound ? cabX + cabW * 0.5 : cabX + cabW * 0.2;
+  ctx.beginPath(); ctx.roundRect(glassX, y + 4, cabW * 0.3, h - 8, 1); ctx.fill();
 }
 
 // ── BUS (1025+ B) ─────────────────
 function drawBus(ctx, v) {
-  const { x, y, w, h, color, isInbound } = v;
-  ctx.fillStyle = color;
-  ctx.beginPath(); ctx.roundRect(x, y, w, h, 3); ctx.fill();
-  ctx.fillStyle = '#111';
-  ctx.fillRect(isInbound ? x + w - 8 : x + 2, y + 2, 6, h - 4);
+  const { x, y, w, h, isInbound, protocol } = v;
+  const paint = PROTO_PAINT[protocol] || PROTO_PAINT.OTHER;
+  
+  // Main body
+  const grad = ctx.createLinearGradient(0, y, 0, y + h);
+  grad.addColorStop(0, paint.d); grad.addColorStop(0.5, paint.m); grad.addColorStop(1, paint.d);
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, 6); ctx.fill();
+  
+  // Roof AC units
+  ctx.fillStyle = '#e5e7eb';
+  ctx.beginPath(); ctx.roundRect(x + w * 0.2, y + h / 2 - 3, w * 0.15, 6, 2); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(x + w * 0.6, y + h / 2 - 3, w * 0.15, 6, 2); ctx.fill();
+  
+  // Front Windshield
+  ctx.fillStyle = '#111928';
+  ctx.beginPath(); ctx.roundRect(!isInbound ? x + w - 8 : x + 2, y + 2, 6, h - 4, 2); ctx.fill();
 }
 
 // ── Generic vehicle renderer with rich info overlay ─────────────────
 function drawVehicle(ctx, v, isSelected) {
-  const { x, y, w, h, type, glowColor, color, id } = v;
+  const { x, y, w, h, type, color, id } = v;
   ctx.save();
   
   if (isSelected) {
-    ctx.shadowBlur = 35; ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 10; ctx.shadowColor = '#ffffff';
     ctx.strokeStyle = '#ffffffcc'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.roundRect(x - 4, y - 4, w + 8, h + 8, 6); ctx.stroke();
+    ctx.beginPath(); ctx.rect(x - 4, y - 4, w + 8, h + 8); ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
-  ctx.shadowBlur = 14; ctx.shadowColor = glowColor;
-
+  // NO SHINING: removed the overall neon glow
+  
   switch (type) {
     case 'CYCLE': drawCycle(ctx, v); break;
     case 'CAR':   drawCar(ctx, v);   break;
@@ -212,20 +278,10 @@ function drawVehicle(ctx, v, isSelected) {
     default:      drawCar(ctx, v);
   }
 
-  if (type === 'CYCLE') {
-    const tX = v.isInbound ? x - 1 : x + w;
-    const trailLen = 30;
-    const g = ctx.createLinearGradient(tX, 0, tX + (v.isInbound ? -trailLen : trailLen), 0);
-    g.addColorStop(0, '#ffffff55'); g.addColorStop(1, '#ffffff00');
-    ctx.fillStyle = g;
-    ctx.fillRect(v.isInbound ? tX - trailLen : tX, y + h / 2 - 2, trailLen, 4);
-  }
-
-  // ── RICH INFO OVERLAY ──────────────────
-  ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
+  // ── RICH INFO OVERLAY (Only drawn if packet matches some condition, or always shown? Currently always drawn) ──────────────────
   const protoStr = v.protocol || '??';
   const sizeStr  = v.size > 999 ? (v.size / 1024).toFixed(1) + 'K' : v.size + 'B';
-  const dirArrow = v.isInbound ? '▶' : '◀';
+  const dirArrow = v.isInbound ? '◀' : '▶';
   const srcShort = (v.srcIP || '?').split('.').slice(-2).join('.');
   const dstShort = (v.dstIP || '?').split('.').slice(-2).join('.');
   const portStr  = v.dstPort ? ':' + v.dstPort : '';
@@ -243,8 +299,8 @@ function drawVehicle(ctx, v, isSelected) {
   const infoX = x + w / 2 - infoW / 2;
   const infoY = y - infoH - 6;
 
-  ctx.fillStyle = '#000000dd';
-  ctx.strokeStyle = color + '77'; ctx.lineWidth = 0.8;
+  ctx.fillStyle = '#111827dd';
+  ctx.strokeStyle = '#374151'; ctx.lineWidth = 0.8;
   ctx.beginPath(); ctx.roundRect(infoX, infoY, infoW, infoH, 3); ctx.fill(); ctx.stroke();
   ctx.fillStyle = color;
   ctx.fillRect(infoX + 1, infoY + 2, 2, infoH - 4);
@@ -252,7 +308,7 @@ function drawVehicle(ctx, v, isSelected) {
   ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(line1, infoX + 6, infoY + 3);
   ctx.font = '7px "Share Tech Mono", monospace';
-  ctx.fillStyle = '#8890b0';
+  ctx.fillStyle = '#9ca3af';
   ctx.fillText(line2, infoX + 6, infoY + 13);
 
   ctx.restore();
@@ -266,9 +322,9 @@ function drawCanvasHUD(ctx, w, h, vehicles) {
   ctx.save();
   ctx.font = 'bold 10px "Orbitron", sans-serif';
   ctx.fillStyle = '#3b82f688'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText(`▶ INBOUND  ${inC}`, 12, 8);
+  ctx.fillText(`◀ INBOUND  ${inC}`, 12, 8);
   ctx.fillStyle = '#ff335588'; ctx.textAlign = 'right';
-  ctx.fillText(`${outC}  OUTBOUND ◀`, w - 12, halfH + 8);
+  ctx.fillText(`${outC}  OUTBOUND ▶`, w - 12, halfH + 8);
 
   // Legend
   const lx = 10, ly = halfH - 82;
@@ -356,7 +412,7 @@ function ManifestPanel({ vehicle, onClose, onPauseToggle, isPaused }) {
             {vehicle.protocol}
           </span>
           <span className={`font-mono text-[11px] px-2.5 py-0.5 rounded font-semibold tracking-wide border ${vehicle.isInbound ? 'bg-green-950 border-green-500 text-green-400' : 'bg-red-950 border-red-500 text-red-400'}`}>
-            {vehicle.isInbound ? '▶ INBOUND' : '◀ OUTBOUND'}
+            {vehicle.isInbound ? '◀ INBOUND' : '▶ OUTBOUND'}
           </span>
           <span className="bg-yellow-950 border border-yellow-600 text-yellow-400 font-mono text-[11px] px-2.5 py-0.5 rounded tracking-wide">
             {vehicle.size} B · {TYPE_LABEL[vehicle.type]}
@@ -379,6 +435,20 @@ function ManifestPanel({ vehicle, onClose, onPauseToggle, isPaused }) {
             {geo.city && <ManifestRow label="GeoIP City" value={geo.city} accent="#00f5ff" />}
           </>
         )}
+        {vehicle.ttl != null && <ManifestRow label="IP TTL" value={vehicle.ttl} />}
+        {vehicle.tcpFlags && (
+          <ManifestRow 
+            label="TCP Flags" 
+            value={Object.entries(vehicle.tcpFlags)
+              .filter(([_, v]) => v)
+              .map(([k]) => k.toUpperCase())
+              .join(' · ') || 'NONE'} 
+            accent={col} 
+          />
+        )}
+        {vehicle.seqNo != null && <ManifestRow label="Sequence No" value={vehicle.seqNo} />}
+        {vehicle.ackNo != null && <ManifestRow label="Ack No" value={vehicle.ackNo} />}
+        {vehicle.tcpWindow != null && <ManifestRow label="TCP Window" value={vehicle.tcpWindow} />}
       </div>
 
       {/* Footer */}
@@ -611,9 +681,10 @@ export default function App() {
       }
     };
     resize();
+    
     const ro = new ResizeObserver(resize);
     ro.observe(canvas.parentElement);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); };
   }, []);
 
   // ── Animation loop ────────────────────────────────────────────
@@ -632,14 +703,85 @@ export default function App() {
       const w = canvas.clientWidth, h = canvas.clientHeight;
       drawRoad(ctx, w, h);
       if (!pausedRef.current) {
-        vehiclesRef.current = vehiclesRef.current.filter(v => {
-          if (v.isInbound) {
-            v.y += v.speed;
-            return v.y < h + 400; // Extra padding for 3D scaling
+        const activeVehicles = vehiclesRef.current;
+        const halfH = h / 2;
+        const laneH = halfH / 4;
+        const SAFE_DIST = 45;
+
+        activeVehicles.forEach(v1 => {
+          let frontVehicle = null;
+          let minDistance = Infinity;
+
+          activeVehicles.forEach(v2 => {
+            if (v1 === v2 || v1.isInbound !== v2.isInbound || v1.laneIdx !== v2.laneIdx) return;
+            
+            const c1 = v1.x + v1.w / 2;
+            const c2 = v2.x + v2.w / 2;
+            
+            let isAhead = false;
+            let dist = 0;
+            
+            if (!v1.isInbound) {
+              isAhead = c2 > c1 || (c2 === c1 && v2.uid > v1.uid);
+              dist = c2 - c1 - (v1.w / 2 + v2.w / 2);
+            } else {
+              isAhead = c2 < c1 || (c2 === c1 && v2.uid > v1.uid);
+              dist = c1 - c2 - (v1.w / 2 + v2.w / 2);
+            }
+
+            if (isAhead && dist < minDistance) {
+              minDistance = dist;
+              frontVehicle = v2;
+            }
+          });
+
+          if (frontVehicle && minDistance < SAFE_DIST) {
+            let overtook = false;
+            const tryOvertake = (targetLane) => {
+              if (targetLane < 0 || targetLane > 3) return false;
+              const laneClear = !activeVehicles.some(v2 => {
+                if (v1 === v2 || v1.isInbound !== v2.isInbound || v2.laneIdx !== targetLane) return false;
+                return v1.x < v2.x + v2.w + SAFE_DIST && v1.x + v1.w + SAFE_DIST > v2.x;
+              });
+
+              if (laneClear) {
+                v1.laneIdx = targetLane;
+                const offset = v1.isInbound ? 0 : halfH;
+                v1.targetY = offset + targetLane * laneH + (laneH / 2) - (v1.h / 2);
+                return true;
+              }
+              return false;
+            };
+
+            if (Math.random() > 0.5) overtook = tryOvertake(v1.laneIdx - 1) || tryOvertake(v1.laneIdx + 1);
+            else overtook = tryOvertake(v1.laneIdx + 1) || tryOvertake(v1.laneIdx - 1);
+
+            if (!overtook) {
+              v1.speed = frontVehicle.speed;
+              // If already overlapping, slightly push back if possible
+              if (minDistance < 0) v1.x -= (v1.isInbound ? -0.5 : 0.5);
+            } else {
+              v1.speed = v1.baseSpeed;
+            }
           } else {
-            v.y -= v.speed;
-            return v.y > -v.h - 400;
+            if (Math.abs(v1.speed) < Math.abs(v1.baseSpeed)) {
+               v1.speed += (v1.baseSpeed > 0 ? 0.08 : -0.08);
+               if (Math.abs(v1.speed) > Math.abs(v1.baseSpeed)) v1.speed = v1.baseSpeed;
+            }
           }
+
+          if (Math.abs(v1.y - v1.targetY) > 0.5) {
+            v1.y += (v1.targetY - v1.y) * 0.15;
+          } else {
+            v1.y = v1.targetY;
+          }
+          
+          v1.x += v1.speed;
+        });
+
+        vehiclesRef.current = activeVehicles.filter(v => {
+          if (v.isInbound) return v.x > -v.w - 400; 
+          else return v.x < w + 400;
         });
       }
       vehiclesRef.current.forEach(v => drawVehicle(ctx, v, selectedVehicle ? v.uid === selectedVehicle.uid : false));

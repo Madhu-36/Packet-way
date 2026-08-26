@@ -283,12 +283,30 @@ function startLiveCapture() {
         dstIP = ip.info.dstaddr;
 
         // Decode transport layer
+        let tcpFlags = null;
+        let ttl = ip.info.ttl;
+        let tcpWindow = null;
+        let seqNo = null;
+        let ackNo = null;
+        
         switch (ip.info.protocol) {
           case PROTOCOL.IP.TCP: {
             const tcp = decoders.TCP(buffer, ip.offset);
             protocol = 'TCP';
             srcPort  = tcp.info.srcport;
             dstPort  = tcp.info.dstport;
+            seqNo    = tcp.info.seqno;
+            ackNo    = tcp.info.ackno;
+            tcpWindow = tcp.info.window;
+            const f = tcp.info.flags;
+            tcpFlags = {
+              fin: (f & 0x01) !== 0,
+              syn: (f & 0x02) !== 0,
+              rst: (f & 0x04) !== 0,
+              psh: (f & 0x08) !== 0,
+              ack: (f & 0x10) !== 0,
+              urg: (f & 0x20) !== 0,
+            };
             break;
           }
           case PROTOCOL.IP.UDP: {
@@ -335,6 +353,11 @@ function startLiveCapture() {
           vehicleType,
           geo        : geo || { country: '??', city: '', flag: '🌐' },
           timestamp  : now,
+          ttl,
+          tcpFlags,
+          tcpWindow,
+          seqNo,
+          ackNo
         });
 
         emitCount++;

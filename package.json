@@ -11,6 +11,7 @@
     "cap": "0.2.1",
     "express": "^4.21.2",
     "geoip-lite": "^1.4.10",
+    "puppeteer": "^25.9.0",
     "socket.io": "^4.8.1"
   },
   "engines": {
