@@ -2,7 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { Network, Terminal, Settings, Play, Pause, ArrowDownLeft, ArrowUpRight, Activity, Box, X } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import Canvas3D from './Canvas3D';
+import Canvas2D from './Canvas2D';
+import { preloadAssets } from './utils/assetLoader';
 
 const SERVER_URL = 'http://localhost:3001';
 const MAX_VEHICLES = 300;
@@ -169,8 +170,9 @@ function BandwidthChart({ data }) {
 
 function createVehicle(pkt, cw, ch) {
   let type, w, h;
-  if (pkt.size <= 64)        { type = 'CYCLE'; w = 20; h = 10; }
-  else if (pkt.size <= 512)  { type = 'CAR';   w = 40; h = 20; }
+  if (pkt.size <= 48)        { type = 'BICYCLE'; w = 20; h = 8; }
+  else if (pkt.size <= 80)   { type = 'MOTORCYCLE'; w = 30; h = 12; }
+  else if (pkt.size <= 512)  { type = 'CAR';   w = 45; h = 22; }
   else if (pkt.size <= 1024) { type = 'TRUCK'; w = 80; h = 25; }
   else                       { type = 'BUS';   w = 120; h = 30; }
 
@@ -210,12 +212,15 @@ export default function App() {
   const [filters, setFilters]               = useState({ tcp: true, udp: true, icmp: true, portFilter: '', minSize: 0 });
   const [stats, setStats]                   = useState({ total: 0, inbound: 0, outbound: 0, pps: 0, fps: 0, bwIn: 0, bwOut: 0 });
   const [bwData, setBwData]                 = useState([]);
+  const [assetsLoaded, setAssetsLoaded]     = useState(false);
 
   const filtersRef = useRef(filters);
   useEffect(() => { filtersRef.current = filters; }, [filters]);
   const statsAccRef = useRef({ total: 0, inbound: 0, outbound: 0, ppsBuffer: [], fps: 0 });
 
   useEffect(() => {
+    preloadAssets().then(() => setAssetsLoaded(true));
+
     const socket = io(SERVER_URL, { reconnectionDelayMax: 5000, transports: ['websocket', 'polling'] });
     socket.on('connect',       () => setConnected(true));
     socket.on('disconnect',    () => setConnected(false));
@@ -224,6 +229,8 @@ export default function App() {
 
     socket.on('packets', (packetsArray) => {
       if (!Array.isArray(packetsArray)) return;
+      if (pausedRef.current) return; // Prevent new packets from accumulating while investigating
+
       const f = filtersRef.current;
       const sr = statsAccRef.current;
       const bw = bwRef.current;
@@ -294,6 +301,21 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault(); // Prevent page scroll
+        setIsPaused(prev => {
+          const next = !prev;
+          pausedRef.current = next;
+          return next;
+        });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const handlePause = () => {
     const next = !isPaused;
     setIsPaused(next);
@@ -315,13 +337,19 @@ export default function App() {
   return (
     <div className='flex flex-col h-screen w-full bg-[#050510] text-text font-[var(--font-sans)] overflow-hidden relative'>
       <div className='absolute inset-0 z-0' onClick={clearSelection}>
-        <Canvas3D 
-          vehiclesRef={vehiclesRef}
-          pausedRef={pausedRef}
-          statsAccRef={statsAccRef}
-          selectedVehicle={selectedVehicle}
-          setSelectedVehicle={handleVehicleSelect}
-        />
+        {assetsLoaded ? (
+          <Canvas2D 
+            vehiclesRef={vehiclesRef}
+            pausedRef={pausedRef}
+            statsAccRef={statsAccRef}
+            selectedVehicle={selectedVehicle}
+            setSelectedVehicle={handleVehicleSelect}
+          />
+        ) : (
+          <div className="flex items-center justify-center w-full h-full text-muted font-mono text-sm tracking-widest">
+            <Activity className="animate-pulse mr-2" size={16} /> INITIALIZING HIGHWAY PROTOCOLS...
+          </div>
+        )}
       </div>
 
       <div className='absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4'>
@@ -361,8 +389,8 @@ export default function App() {
                 <Settings size={16} />
               </button>
               <button onClick={(e) => { e.stopPropagation(); handlePause(); }}
-                      className={`p-2 rounded border bg-surface/80 backdrop-blur transition-all ${isPaused ? 'border-orange-500 text-orange-500' : 'border-border text-muted hover:text-text hover:border-text'}`}>
-                {isPaused ? <Play size={16} /> : <Pause size={16} />}
+                      className={`flex items-center gap-2 px-4 py-2 font-bold font-mono text-xs rounded border bg-surface/80 backdrop-blur transition-all shadow-lg ${isPaused ? 'border-orange-500 text-orange-500 hover:bg-orange-500/10' : 'border-border text-muted hover:text-text hover:border-text'}`}>
+                {isPaused ? <><Play size={16} /> RESUME TRAFFIC</> : <><Pause size={16} /> PAUSE TRAFFIC</>}
               </button>
             </div>
             {filterOpen && (
