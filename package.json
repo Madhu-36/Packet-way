@@ -8,6 +8,7 @@
     "dev": "node server.js"
   },
   "dependencies": {
+    "canvas": "^3.2.3",
     "cap": "0.2.1",
     "express": "^4.21.2",
     "geoip-lite": "^1.4.10",
