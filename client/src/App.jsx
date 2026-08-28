@@ -1,16 +1,16 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { io } from 'socket.io-client';
-import { Network, Terminal, Settings, Play, Pause, ArrowDownLeft, ArrowUpRight, Activity, Box, X } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import Canvas2D from './Canvas2D';
-import { preloadAssets } from './utils/assetLoader';
+import { Network, Terminal, Settings, Play, Pause, ArrowDownLeft, ArrowUpRight, Activity, Box, X, Download, ShieldAlert, Volume2, VolumeX } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
+import Canvas3D from './Canvas3D';
 
 const SERVER_URL = 'http://localhost:3001';
-const MAX_VEHICLES = 300;
+// Increased MAX_VEHICLES to take advantage of InstancedMesh!
+const MAX_VEHICLES = 3000;
 
-function StatBlock({ label, value, icon, accent }) {
+function StatBlock({ label, value, icon, accent, flash }) {
   return (
-    <div className='flex flex-col bg-[#0b0c16] rounded border border-border px-3 py-2 w-28 shrink-0'>
+    <div className={`flex flex-col bg-[#0b0c16] rounded border px-3 py-2 w-28 shrink-0 ${flash ? 'border-red-500 animate-pulse' : 'border-border'}`}>
       <div className='flex items-center gap-1.5 text-[9px] font-mono text-muted uppercase tracking-widest mb-1'>
         {icon && React.cloneElement(icon, { style: { color: accent } })}
         {label}
@@ -27,7 +27,7 @@ function ManifestRow({ label, value, accent }) {
   return (
     <div className='flex justify-between items-center py-1.5 border-b border-border/50 last:border-0'>
       <span className='text-[10px] font-mono text-muted uppercase tracking-wider'>{label}</span>
-      <span className='text-xs font-mono font-medium' style={{ color: accent || '#d1d5db' }}>{value}</span>
+      <span className='text-xs font-mono font-medium truncate ml-4' style={{ color: accent || '#d1d5db' }}>{value}</span>
     </div>
   );
 }
@@ -35,7 +35,7 @@ function ManifestRow({ label, value, accent }) {
 function ManifestPanel({ vehicle, onClose }) {
   if (!vehicle) return null;
 
-  const col = '#00f0ff';
+  const col = vehicle.suspicious ? '#ff0000' : '#00f0ff';
   const geo = vehicle.geo || {};
   const isOut = !vehicle.isInbound;
 
@@ -45,7 +45,7 @@ function ManifestPanel({ vehicle, onClose }) {
         <div className='absolute top-0 left-0 w-full h-[1px]' style={{ background: `linear-gradient(90deg, transparent, ${col}, transparent)` }} />
         <div>
           <div className='flex items-center gap-2 mb-1'>
-            <Box size={14} style={{ color: col }} />
+            {vehicle.suspicious ? <ShieldAlert size={14} className="text-red-500 animate-pulse" /> : <Box size={14} style={{ color: col }} />}
             <h2 className='font-[var(--font-display)] text-lg font-bold text-text uppercase tracking-widest'>Cargo Manifest</h2>
           </div>
           <div className='text-[10px] font-mono text-muted tracking-widest'>ID: {vehicle.uid}</div>
@@ -90,6 +90,7 @@ function ManifestPanel({ vehicle, onClose }) {
         <div className='bg-bg border border-border rounded px-3 py-1'>
           <ManifestRow label='Payload Size' value={vehicle.size > 999 ? (vehicle.size / 1024).toFixed(2) + ' KB' : vehicle.size + ' Bytes'} accent='#fff' />
           <ManifestRow label='Transport Type' value={vehicle.type} />
+          {vehicle.suspicious && <ManifestRow label='IDS Status' value="SUSPICIOUS" accent="#ef4444" />}
         </div>
 
         {geo.country && geo.country !== '??' && (
@@ -111,6 +112,71 @@ function ManifestPanel({ vehicle, onClose }) {
           {vehicle.seqNo != null && <ManifestRow label='Sequence No' value={vehicle.seqNo} />}
           {vehicle.ackNo != null && <ManifestRow label='Ack No' value={vehicle.ackNo} />}
           {vehicle.tcpWindow != null && <ManifestRow label='TCP Window' value={vehicle.tcpWindow} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsPanel({ analytics, onClose }) {
+  if (!analytics) return null;
+
+  const data = [
+    { name: 'TCP', value: analytics.protocolStats.TCP || 0, color: '#00f0ff' },
+    { name: 'UDP', value: analytics.protocolStats.UDP || 0, color: '#ffaa00' },
+    { name: 'ICMP', value: analytics.protocolStats.ICMP || 0, color: '#a855f7' },
+    { name: 'OTHER', value: analytics.protocolStats.OTHER || 0, color: '#6b7280' },
+  ].filter(d => d.value > 0);
+
+  return (
+    <div className='absolute left-4 top-20 w-[300px] bg-surface/90 backdrop-blur-xl border border-border shadow-2xl flex flex-col pointer-events-auto rounded-md overflow-hidden z-40'>
+      <div className='bg-bg p-3 border-b border-border flex justify-between items-center'>
+        <div className='flex items-center gap-2'>
+          <Activity size={14} className="text-cyan" />
+          <h2 className='font-[var(--font-display)] text-sm font-bold text-text uppercase tracking-widest'>Analytics Console</h2>
+        </div>
+        <button onClick={onClose} className='text-muted hover:text-white'>
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className='p-4 flex flex-col gap-4'>
+        <div>
+          <div className='text-[10px] font-mono text-muted uppercase tracking-widest mb-2'>Protocol Distribution</div>
+          <div className='h-32 flex justify-center'>
+            {data.length > 0 ? (
+              <PieChart width={120} height={120}>
+                <Pie data={data} cx={60} cy={60} innerRadius={40} outerRadius={60} paddingAngle={2} dataKey="value" stroke="none">
+                  {data.map((entry, index) => <Cell key={index} fill={entry.color} />)}
+                </Pie>
+                <Tooltip contentStyle={{ backgroundColor: '#0b0c16', border: '1px solid #1a1a3a', fontSize: '10px' }} />
+              </PieChart>
+            ) : <div className="text-muted text-xs flex items-center h-full">No Data</div>}
+          </div>
+          <div className="flex gap-2 justify-center mt-2 flex-wrap">
+            {data.map((d, i) => (
+              <div key={i} className="flex items-center gap-1 text-[9px] font-mono">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: d.color }} />
+                {d.name} ({(d.value/1000).toFixed(1)}k)
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className='border-t border-border pt-4'>
+          <div className='text-[10px] font-mono text-muted uppercase tracking-widest mb-2'>Top Talkers (Bandwidth)</div>
+          <div className="flex flex-col gap-2">
+            {analytics.topTalkers?.slice(0, 5).map(([ip, stats], i) => (
+              <div key={ip} className="flex justify-between items-center bg-bg/50 p-1.5 rounded border border-border/50">
+                <div className="flex items-center gap-2 truncate">
+                  <span className="text-[10px] text-muted">{i+1}.</span>
+                  <span className="text-xs font-mono">{stats.geo?.flag || '🌐'}</span>
+                  <span className="text-[11px] font-mono text-cyan truncate">{ip}</span>
+                </div>
+                <span className="text-[10px] font-mono text-muted ml-2">{(stats.bytes/1024/1024).toFixed(2)} MB</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -170,17 +236,30 @@ function BandwidthChart({ data }) {
 
 function createVehicle(pkt, cw, ch) {
   let type, w, h;
-  if (pkt.size <= 48)        { type = 'BICYCLE'; w = 20; h = 8; }
-  else if (pkt.size <= 80)   { type = 'MOTORCYCLE'; w = 30; h = 12; }
-  else if (pkt.size <= 512)  { type = 'CAR';   w = 45; h = 22; }
-  else if (pkt.size <= 1024) { type = 'TRUCK'; w = 80; h = 25; }
-  else                       { type = 'BUS';   w = 120; h = 30; }
+  
+  // Expanded vehicle types based on ports
+  const isDNS = pkt.srcPort === 53 || pkt.dstPort === 53;
+  const isHTTP = pkt.srcPort === 80 || pkt.dstPort === 80 || pkt.srcPort === 443 || pkt.dstPort === 443;
+  
+  if (isDNS) {
+    type = 'CYCLE'; w = 15; h = 10;
+  } else if (isHTTP) {
+    type = pkt.size > 1000 ? 'BUS' : 'TRUCK';
+    w = pkt.size > 1000 ? 120 : 80;
+    h = pkt.size > 1000 ? 30 : 25;
+  } else {
+    // Default mapping by size
+    if (pkt.size <= 64)        { type = 'CYCLE'; w = 20; h = 10; }
+    else if (pkt.size <= 512)  { type = 'CAR';   w = 40; h = 20; }
+    else if (pkt.size <= 1024) { type = 'TRUCK'; w = 80; h = 25; }
+    else                       { type = 'BUS';   w = 120; h = 30; }
+  }
 
   const protocol = pkt.protocol || 'OTHER';
   const isOut = pkt.direction === 'OUTBOUND';
   const x = isOut ? -w - 100 : cw + 100;
   
-  const speed = (Math.random() * 3 + 2) * (isOut ? 1 : -1);
+  const speed = (Math.random() * 3 + 2) * (isOut ? 1 : -1) * (isDNS ? 1.5 : 1); // DNS is faster
   
   const halfH = ch / 2;
   const laneH = halfH / 4;
@@ -195,14 +274,53 @@ function createVehicle(pkt, cw, ch) {
     baseSpeed: speed, laneIdx, targetY: y,
     protocol, size: pkt.size, isInbound: !isOut,
     srcIP: pkt.srcIP, dstIP: pkt.dstIP, srcPort: pkt.srcPort, dstPort: pkt.dstPort, geo: pkt.geo,
-    ttl: pkt.ttl, tcpFlags: pkt.tcpFlags, tcpWindow: pkt.tcpWindow, seqNo: pkt.seqNo, ackNo: pkt.ackNo
+    ttl: pkt.ttl, tcpFlags: pkt.tcpFlags, tcpWindow: pkt.tcpWindow, seqNo: pkt.seqNo, ackNo: pkt.ackNo,
+    suspicious: pkt.suspicious
   };
+}
+
+// Audio System using Web Audio API
+class AudioEngine {
+  constructor() {
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.enabled = false;
+  }
+  
+  playAmbient() {
+    if (!this.enabled || !this.ctx) return;
+    // Simple synth chord for ambiance
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(110, this.ctx.currentTime); // A2
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    gain.gain.setValueAtTime(0.01, this.ctx.currentTime);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 2);
+  }
+
+  playAlert() {
+    if (!this.enabled || !this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(440, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, this.ctx.currentTime + 0.1);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    gain.gain.setValueAtTime(0.05, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.3);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.3);
+  }
 }
 
 export default function App() {
   const vehiclesRef  = useRef([]);
   const pausedRef    = useRef(false);
   const bwRef = useRef({ inBytes: 0, outBytes: 0, history: [] });
+  const socketRef = useRef(null);
 
   const [connected, setConnected]           = useState(false);
   const [captureInfo, setCaptureInfo]       = useState(null);
@@ -212,54 +330,81 @@ export default function App() {
   const [filters, setFilters]               = useState({ tcp: true, udp: true, icmp: true, portFilter: '', minSize: 0 });
   const [stats, setStats]                   = useState({ total: 0, inbound: 0, outbound: 0, pps: 0, fps: 0, bwIn: 0, bwOut: 0 });
   const [bwData, setBwData]                 = useState([]);
-  const [assetsLoaded, setAssetsLoaded]     = useState(false);
+  
+  const [analytics, setAnalytics]           = useState(null);
+  const [showAnalytics, setShowAnalytics]   = useState(true);
+  
+  const [audioEnabled, setAudioEnabled]     = useState(false);
+  const audioRef = useRef(null);
+  const alertCooldown = useRef(0);
 
   const filtersRef = useRef(filters);
   useEffect(() => { filtersRef.current = filters; }, [filters]);
   const statsAccRef = useRef({ total: 0, inbound: 0, outbound: 0, ppsBuffer: [], fps: 0 });
 
   useEffect(() => {
-    preloadAssets().then(() => setAssetsLoaded(true));
-
     const socket = io(SERVER_URL, { reconnectionDelayMax: 5000, transports: ['websocket', 'polling'] });
+    socketRef.current = socket;
+    
     socket.on('connect',       () => setConnected(true));
     socket.on('disconnect',    () => setConnected(false));
     socket.on('connect_error', () => setConnected(false));
-    socket.on('capture-status', (info) => setCaptureInfo(info));
+    socket.on('capture-status', (info) => {
+      setCaptureInfo(info);
+      if (info.isPaused !== undefined) {
+        setIsPaused(info.isPaused);
+        pausedRef.current = info.isPaused;
+      }
+    });
 
-    socket.on('packets', (packetsArray) => {
-      if (!Array.isArray(packetsArray)) return;
-      if (pausedRef.current) return; // Prevent new packets from accumulating while investigating
+    socket.on('analytics', (data) => setAnalytics(data));
+    socket.on('trigger-export', async () => {
+      try {
+        const response = await fetch(`${SERVER_URL}/export-pcap`);
+        if (!response.ok) throw new Error('Failed to fetch capture data');
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'packet-capture.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error("Export failed:", err);
+        alert("Export failed: " + err.message);
+      }
+    });
 
+    socket.on('packets', (packets) => {
       const f = filtersRef.current;
-      const sr = statsAccRef.current;
-      const bw = bwRef.current;
-      const now = Date.now();
-
-      for (const pkt of packetsArray) {
-        if (!pkt) continue;
-        if (pkt.protocol === 'TCP'  && !f.tcp)  continue;
-        if (pkt.protocol === 'UDP'  && !f.udp)  continue;
-        if (pkt.protocol === 'ICMP' && !f.icmp) continue;
-        if (f.minSize > 0 && pkt.size < f.minSize) continue;
+      
+      packets.forEach(pkt => {
+        if (!pkt) return;
+        if (pkt.protocol === 'TCP'  && !f.tcp)  return;
+        if (pkt.protocol === 'UDP'  && !f.udp)  return;
+        if (pkt.protocol === 'ICMP' && !f.icmp) return;
+        if (f.minSize > 0 && pkt.size < f.minSize) return;
         if (f.portFilter) {
           const p = parseInt(f.portFilter);
-          if (!isNaN(p) && pkt.srcPort !== p && pkt.dstPort !== p) continue;
+          if (!isNaN(p) && pkt.srcPort !== p && pkt.dstPort !== p) return;
         }
 
         const v = createVehicle(pkt, 2000, 800);
         vehiclesRef.current.push(v);
 
-        sr.total++;
-        sr.ppsBuffer.push(now);
-        if (pkt.direction === 'INBOUND') {
-          sr.inbound++;
-          bw.inBytes += pkt.size;
-        } else {
-          sr.outbound++;
-          bw.outBytes += pkt.size;
+        if (pkt.suspicious && audioRef.current && Date.now() - alertCooldown.current > 1000) {
+          audioRef.current.playAlert();
+          alertCooldown.current = Date.now();
         }
-      }
+
+        const sr = statsAccRef.current;
+        sr.total++;
+        sr.ppsBuffer.push(Date.now());
+        if (pkt.direction === 'INBOUND') sr.inbound++; else sr.outbound++;
+        if (pkt.direction === 'INBOUND') bwRef.current.inBytes += pkt.size; else bwRef.current.outBytes += pkt.size;
+      });
 
       if (vehiclesRef.current.length > MAX_VEHICLES) {
         vehiclesRef.current.splice(0, vehiclesRef.current.length - MAX_VEHICLES);
@@ -267,6 +412,16 @@ export default function App() {
     });
 
     return () => socket.disconnect();
+  }, []);
+
+  // Ambient Audio Loop
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (audioRef.current && !pausedRef.current) {
+        audioRef.current.playAmbient();
+      }
+    }, 4000);
+    return () => clearInterval(iv);
   }, []);
 
   useEffect(() => {
@@ -301,55 +456,46 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.code === 'Space') {
-        e.preventDefault(); // Prevent page scroll
-        setIsPaused(prev => {
-          const next = !prev;
-          pausedRef.current = next;
-          return next;
-        });
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
   const handlePause = () => {
     const next = !isPaused;
-    setIsPaused(next);
-    pausedRef.current = next;
+    if (socketRef.current) {
+      if (next) socketRef.current.emit('pause-capture');
+      else socketRef.current.emit('resume-capture');
+    }
+  };
+
+  const handleExport = () => {
+    if (socketRef.current) socketRef.current.emit('export-pcap');
+  };
+
+  const toggleAudio = () => {
+    if (!audioRef.current) audioRef.current = new AudioEngine();
+    const n = !audioEnabled;
+    audioRef.current.enabled = n;
+    if (n && audioRef.current.ctx.state === 'suspended') {
+      audioRef.current.ctx.resume();
+    }
+    setAudioEnabled(n);
   };
 
   const handleVehicleSelect = (v) => {
     setSelectedVehicle(v);
-    setIsPaused(true);
-    pausedRef.current = true;
   };
 
   const clearSelection = () => {
     setSelectedVehicle(null);
-    setIsPaused(false);
-    pausedRef.current = false;
   };
 
   return (
     <div className='flex flex-col h-screen w-full bg-[#050510] text-text font-[var(--font-sans)] overflow-hidden relative'>
       <div className='absolute inset-0 z-0' onClick={clearSelection}>
-        {assetsLoaded ? (
-          <Canvas2D 
-            vehiclesRef={vehiclesRef}
-            pausedRef={pausedRef}
-            statsAccRef={statsAccRef}
-            selectedVehicle={selectedVehicle}
-            setSelectedVehicle={handleVehicleSelect}
-          />
-        ) : (
-          <div className="flex items-center justify-center w-full h-full text-muted font-mono text-sm tracking-widest">
-            <Activity className="animate-pulse mr-2" size={16} /> INITIALIZING HIGHWAY PROTOCOLS...
-          </div>
-        )}
+        <Canvas3D 
+          vehiclesRef={vehiclesRef}
+          pausedRef={pausedRef}
+          statsAccRef={statsAccRef}
+          selectedVehicle={selectedVehicle}
+          setSelectedVehicle={handleVehicleSelect}
+        />
       </div>
 
       <div className='absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4'>
@@ -368,29 +514,43 @@ export default function App() {
                 </span>
               </div>
             </div>
+            
+            <div className='flex gap-2 mt-1'>
+              <button onClick={() => setShowAnalytics(!showAnalytics)} className={`text-[10px] uppercase tracking-widest font-mono border px-2 py-1 rounded transition-colors ${showAnalytics ? 'bg-cyan/20 border-cyan text-cyan' : 'bg-surface/80 border-border text-muted hover:text-white'}`}>
+                Analytics
+              </button>
+            </div>
             {captureInfo && (
-              <div className='flex flex-col gap-1 bg-surface/80 backdrop-blur-md border border-border px-3 py-2 rounded shadow-lg max-w-[300px]'>
+              <div className='flex flex-col gap-1 bg-surface/80 backdrop-blur-md border border-border px-3 py-2 rounded shadow-lg max-w-[300px] mt-1'>
                 <div className='text-[10px] font-mono text-cyan uppercase tracking-widest flex items-center gap-1'>
                   <Terminal size={10} /> Active Interface
                 </div>
                 <div className='text-xs text-text truncate' title={captureInfo.device}>
                   {captureInfo.device}
                 </div>
-                <div className='text-[10px] text-muted font-mono mt-1 pt-1 border-t border-border'>
-                  Local IP: {captureInfo.localIps?.join(', ') || 'Unknown'}
-                </div>
               </div>
             )}
           </div>
+          
           <div className='flex flex-col items-end gap-2'>
             <div className='flex items-center gap-2'>
+              <button onClick={(e) => { e.stopPropagation(); toggleAudio(); }}
+                      className={`p-2 rounded border bg-surface/80 backdrop-blur transition-all ${audioEnabled ? 'border-cyan text-cyan' : 'border-border text-muted hover:text-text hover:border-text'}`}>
+                {audioEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); handleExport(); }}
+                      className={`p-2 rounded border bg-surface/80 backdrop-blur transition-all border-border text-muted hover:text-text hover:border-cyan`}
+                      title="Export PCAP / JSON">
+                <Download size={16} />
+              </button>
               <button onClick={(e) => { e.stopPropagation(); setFilterOpen(!filterOpen); }}
                       className={`p-2 rounded border bg-surface/80 backdrop-blur transition-all ${filterOpen ? 'border-cyan text-cyan' : 'border-border text-muted hover:text-text hover:border-text'}`}>
                 <Settings size={16} />
               </button>
               <button onClick={(e) => { e.stopPropagation(); handlePause(); }}
-                      className={`flex items-center gap-2 px-4 py-2 font-bold font-mono text-xs rounded border bg-surface/80 backdrop-blur transition-all shadow-lg ${isPaused ? 'border-orange-500 text-orange-500 hover:bg-orange-500/10' : 'border-border text-muted hover:text-text hover:border-text'}`}>
-                {isPaused ? <><Play size={16} /> RESUME TRAFFIC</> : <><Pause size={16} /> PAUSE TRAFFIC</>}
+                      className={`p-2 rounded border bg-surface/80 backdrop-blur transition-all ${isPaused ? 'border-orange-500 text-orange-500 bg-orange-500/20' : 'border-border text-muted hover:text-text hover:border-text'}`}
+                      title={isPaused ? "Resume Capture" : "Pause Capture"}>
+                {isPaused ? <Play size={16} /> : <Pause size={16} />}
               </button>
             </div>
             {filterOpen && (
@@ -400,17 +560,21 @@ export default function App() {
             )}
           </div>
         </div>
+
         <div className='flex justify-between items-end w-full pointer-events-none'>
           <div className='flex gap-4 bg-surface/80 backdrop-blur-md border border-border rounded-t px-6 py-3 shadow-2xl pointer-events-auto'>
             <StatBlock label='TOTAL PKT' value={stats.total.toLocaleString()} accent='#3b82f6' />
-            <StatBlock label='PPS (1s)' value={stats.pps} accent='#a855f7' />
+            <StatBlock label='PPS (1s)' value={stats.pps} accent='#a855f7' flash={stats.pps > 1000} />
             <StatBlock label='INBOUND' value={stats.inbound.toLocaleString()} icon={<ArrowDownLeft size={10}/>} accent='#3b82f6' />
             <StatBlock label='OUTBOUND' value={stats.outbound.toLocaleString()} icon={<ArrowUpRight size={10}/>} accent='#f97316' />
             <StatBlock label='FPS' value={stats.fps} accent={stats.fps > 50 ? '#10b981' : '#f59e0b'} />
           </div>
         </div>
       </div>
+      
+      {showAnalytics && <AnalyticsPanel analytics={analytics} onClose={() => setShowAnalytics(false)} />}
       <ManifestPanel vehicle={selectedVehicle} onClose={clearSelection} />
+      
       <div className='relative z-20 pointer-events-auto'>
         <BandwidthChart data={bwData} />
       </div>

@@ -134,12 +134,35 @@ function lookupGeo(ip) {
 // ─────────────────────────────────────────────────────────────────────
 const captureState = {
   active       : false,
+  isPaused     : false,
   interfaceName: '',
   interfaceDesc: '',
   localIP      : getPrimaryLocalIP(),
   error        : null,
   packetsTotal : 0,
 };
+
+// ─────────────────────────────────────────────────────────────────────
+//  Analytics & IDS State
+// ─────────────────────────────────────────────────────────────────────
+const topTalkers = new Map();
+const protocolStats = { TCP: 0, UDP: 0, ICMP: 0, OTHER: 0 };
+const ipRates = new Map();
+
+setInterval(() => {
+  if (captureState.isPaused || !captureState.active) return;
+  
+  const sortedTalkers = [...topTalkers.entries()]
+    .sort((a,b) => b[1].bytes - a[1].bytes)
+    .slice(0, 10);
+    
+  io.emit('analytics', { topTalkers: sortedTalkers, protocolStats });
+  
+  for (let [ip, count] of ipRates.entries()) {
+    if (count <= 5) ipRates.delete(ip);
+    else ipRates.set(ip, count / 2);
+  }
+}, 1000);
 
 // ─────────────────────────────────────────────────────────────────────
 //  Live Packet Capture — Npcap / libpcap via `cap`
@@ -241,16 +264,27 @@ function startLiveCapture() {
   const buffer  = Buffer.alloc(65535);
   const capInst = new Cap();
 
-  // Packet buffering to reduce Socket.io emit overhead
-  let packetBuffer = [];
-  let packetIdCounter = 0;
-  
-  setInterval(() => {
-    if (packetBuffer.length > 0) {
-      io.emit('packets', packetBuffer);
-      packetBuffer = [];
+// ─────────────────────────────────────────────────────────────────────
+//  Packet Buffer & Emission Loop
+// ─────────────────────────────────────────────────────────────────────
+const packetBuffer = [];
+let packetIdCounter = 0;
+
+// Rolling buffer for export feature (last 5000 packets)
+const exportBuffer = [];
+
+setInterval(() => {
+  if (packetBuffer.length > 0) {
+    // Save to export buffer
+    exportBuffer.push(...packetBuffer);
+    if (exportBuffer.length > 5000) {
+      exportBuffer.splice(0, exportBuffer.length - 5000);
     }
-  }, 100);
+    
+    io.emit('packets', packetBuffer);
+    packetBuffer.length = 0;
+  }
+}, 100);
 
   try {
     const linkType = capInst.open(deviceName, 'ip', 10 * 1024 * 1024, buffer);
@@ -269,6 +303,8 @@ function startLiveCapture() {
 
     // ── Packet handler ────────────────────────────────────────
     capInst.on('packet', (nbytes) => {
+      if (captureState.isPaused) return;
+
       // Avoid accumulating too many packets in a single interval if flooded
       if (packetBuffer.length > 500) return;
 
@@ -351,6 +387,16 @@ function startLiveCapture() {
 
         captureState.packetsTotal++;
 
+        // IDS & Analytics
+        protocolStats[protocol] = (protocolStats[protocol] || 0) + 1;
+        const tSrc = topTalkers.get(srcIP) || { bytes: 0, geo: geo };
+        tSrc.bytes += nbytes;
+        topTalkers.set(srcIP, tSrc);
+        
+        const rate = (ipRates.get(srcIP) || 0) + 1;
+        ipRates.set(srcIP, rate);
+        const suspicious = rate > 50 || (tcpFlags && tcpFlags.syn && !tcpFlags.ack && rate > 20);
+
         packetBuffer.push({
           id         : (packetIdCounter++).toString(),
           direction,
@@ -369,7 +415,8 @@ function startLiveCapture() {
           tcpFlags,
           tcpWindow,
           seqNo,
-          ackNo
+          ackNo,
+          suspicious
         });
       } catch (_) { /* skip malformed packets */ }
     });
@@ -400,6 +447,22 @@ io.on('connection', (socket) => {
 
   // Send current capture status immediately on connect
   socket.emit('capture-status', { ...captureState });
+  
+  socket.on('pause-capture', () => {
+    captureState.isPaused = true;
+    io.emit('capture-status', { ...captureState });
+    console.log('[WS] Capture PAUSED by client');
+  });
+
+  socket.on('resume-capture', () => {
+    captureState.isPaused = false;
+    io.emit('capture-status', { ...captureState });
+    console.log('[WS] Capture RESUMED by client');
+  });
+
+  socket.on('export-pcap', () => {
+    socket.emit('trigger-export');
+  });
 
   socket.on('disconnect', () => {
     console.log(`[WS] Client disconnected : ${socket.id}`);
@@ -415,6 +478,15 @@ app.get('/health', (_req, res) => res.json({
   packets : captureState.packetsTotal,
   iface   : captureState.interfaceDesc,
 }));
+
+// ─────────────────────────────────────────────────────────────────────
+//  HTTP Export endpoint
+// ─────────────────────────────────────────────────────────────────────
+app.get('/export-pcap', (_req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', 'attachment; filename="packet-capture.json"');
+  res.send(JSON.stringify(exportBuffer, null, 2));
+});
 
 // ─────────────────────────────────────────────────────────────────────
 //  Boot
