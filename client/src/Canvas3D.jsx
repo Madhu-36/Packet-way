@@ -1,10 +1,9 @@
 import React, { useRef, useState, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, Grid, EffectComposer, Bloom, Glitch, ChromaticAberration, Scanline } from '@react-three/drei'; // Actually these are from @react-three/postprocessing!
-// Wait, I will fix imports!
+import { OrbitControls, Grid, Stars, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
-import { Bloom as BloomPP, Glitch as GlitchPP, ChromaticAberration as ChromaticAberrationPP, Scanline as ScanlinePP, EffectComposer as EffectComposerPP } from '@react-three/postprocessing';
-import { BlendFunction, GlitchMode } from 'postprocessing';
+import { Bloom as BloomPP, ChromaticAberration as ChromaticAberrationPP, EffectComposer as EffectComposerPP } from '@react-three/postprocessing';
+import { BlendFunction } from 'postprocessing';
 
 const PROTO_COLOR = {
   TCP: new THREE.Color('#00f0ff'),
@@ -31,7 +30,7 @@ function GlobeMap({ vehiclesRef }) {
      if (!meshRef.current) return;
      let idx = 0;
      vehiclesRef.current.forEach(v => {
-        if (v.geo && v.geo.ll) {
+        if (v.geo && v.geo.ll && idx < MAX_INSTANCES) {
            const [lat, lon] = v.geo.ll;
            const R = 30;
            const phi = (90 - lat) * (Math.PI / 180);
@@ -73,19 +72,20 @@ function InstancedVehicles({ vehiclesRef, pausedRef, statsAccRef, selectedVehicl
     CAB: useRef()
   };
 
+  const instanceMap = useRef({ CAR: [], TRUCK: [], BUS: [], CYCLE: [], CAB: [] });
+
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const color = useMemo(() => new THREE.Color(), []);
 
-  const { camera, pointer, raycaster } = useThree();
-  
-  useFrame(() => {
+
+  useFrame((state, delta) => {
     const activeVehicles = vehiclesRef.current;
     
     if (!pausedRef.current) {
-      statsAccRef.current.fpsBuffer = statsAccRef.current.fpsBuffer || [];
-      statsAccRef.current.fpsBuffer.push(1);
-      if (statsAccRef.current.fpsBuffer.length > 60) statsAccRef.current.fpsBuffer.shift();
-      statsAccRef.current.fps = 60;
+      const currentFps = delta > 0 ? 1 / delta : 60;
+      statsAccRef.current.fps = statsAccRef.current.fps
+        ? Math.round(statsAccRef.current.fps * 0.9 + currentFps * 0.1)
+        : Math.round(currentFps);
       
       activeVehicles.forEach(v1 => {
         let frontVehicle = null;
@@ -180,6 +180,7 @@ function InstancedVehicles({ vehiclesRef, pausedRef, statsAccRef, selectedVehicl
       const idx = counters[type];
       
       if (mesh && idx < MAX_INSTANCES) {
+        instanceMap.current[type][idx] = v;
         let blink = false;
         if (v.suspicious) {
           blink = (Math.sin(time * 5) > 0);
@@ -199,6 +200,7 @@ function InstancedVehicles({ vehiclesRef, pausedRef, statsAccRef, selectedVehicl
           
           const cabMesh = meshRefs.CAB.current;
           if (cabMesh && counters.CAB < MAX_INSTANCES) {
+            instanceMap.current.CAB[counters.CAB] = v;
             dummy.position.set(targetX + w*0.1 * (v.isInbound ? -1 : 1), h2 * 1.5, targetZ);
             dummy.scale.set(w*0.5, h2, h*0.8);
             dummy.updateMatrix();
@@ -216,6 +218,7 @@ function InstancedVehicles({ vehiclesRef, pausedRef, statsAccRef, selectedVehicl
 
           const cabMesh = meshRefs.CAB.current;
           if (cabMesh && counters.CAB < MAX_INSTANCES) {
+            instanceMap.current.CAB[counters.CAB] = v;
             dummy.position.set(targetX + w*0.35 * (v.isInbound ? -1 : 1), h2*0.8, targetZ);
             dummy.scale.set(w*0.25, h*0.8, h);
             dummy.updateMatrix();
@@ -253,29 +256,35 @@ function InstancedVehicles({ vehiclesRef, pausedRef, statsAccRef, selectedVehicl
     });
   });
 
+  const handleClick = (type) => (e) => {
+    e.stopPropagation();
+    const v = e.instanceId !== undefined && instanceMap.current[type][e.instanceId];
+    if (v) setSelectedVehicle(v);
+  };
+
   return (
     <>
-      <instancedMesh ref={meshRefs.CAR} args={[null, null, MAX_INSTANCES]} castShadow>
+      <instancedMesh ref={meshRefs.CAR} args={[null, null, MAX_INSTANCES]} castShadow onClick={handleClick('CAR')}>
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial emissiveIntensity={0.8} />
       </instancedMesh>
       
-      <instancedMesh ref={meshRefs.CAB} args={[null, null, MAX_INSTANCES]} castShadow>
+      <instancedMesh ref={meshRefs.CAB} args={[null, null, MAX_INSTANCES]} castShadow onClick={handleClick('CAB')}>
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial emissiveIntensity={1.2} />
       </instancedMesh>
 
-      <instancedMesh ref={meshRefs.TRUCK} args={[null, null, MAX_INSTANCES]} castShadow>
+      <instancedMesh ref={meshRefs.TRUCK} args={[null, null, MAX_INSTANCES]} castShadow onClick={handleClick('TRUCK')}>
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial metalness={0.5} roughness={0.5} />
       </instancedMesh>
 
-      <instancedMesh ref={meshRefs.BUS} args={[null, null, MAX_INSTANCES]} castShadow>
+      <instancedMesh ref={meshRefs.BUS} args={[null, null, MAX_INSTANCES]} castShadow onClick={handleClick('BUS')}>
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial emissiveIntensity={0.6} />
       </instancedMesh>
 
-      <instancedMesh ref={meshRefs.CYCLE} args={[null, null, MAX_INSTANCES]} castShadow>
+      <instancedMesh ref={meshRefs.CYCLE} args={[null, null, MAX_INSTANCES]} castShadow onClick={handleClick('CYCLE')}>
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial emissiveIntensity={2.0} />
       </instancedMesh>
@@ -285,26 +294,30 @@ function InstancedVehicles({ vehiclesRef, pausedRef, statsAccRef, selectedVehicl
 
 function CameraController({ selectedVehicle }) {
   const { camera } = useThree();
+  const desiredPos = useMemo(() => new THREE.Vector3(), []);
+  const lookTarget = useMemo(() => new THREE.Vector3(), []);
   
   useFrame(() => {
     if (selectedVehicle) {
       const targetX = (selectedVehicle.x - LOGICAL_W / 2) * SCALE;
       const targetZ = (selectedVehicle.y - LOGICAL_H / 2) * SCALE;
       
-      const desiredPos = new THREE.Vector3(
+      desiredPos.set(
         targetX + (selectedVehicle.isInbound ? 30 : -30),
         25,
         targetZ + 30
       );
+      lookTarget.set(targetX, 0, targetZ);
       
       camera.position.lerp(desiredPos, 0.05);
-      camera.lookAt(new THREE.Vector3(targetX, 0, targetZ));
+      camera.lookAt(lookTarget);
     }
   });
 
-  return selectedVehicle ? null : (
+  return (
     <OrbitControls 
-      autoRotate 
+      enabled={!selectedVehicle}
+      autoRotate={!selectedVehicle}
       autoRotateSpeed={0.5} 
       makeDefault 
       minPolarAngle={Math.PI/6} 
@@ -315,12 +328,12 @@ function CameraController({ selectedVehicle }) {
   );
 }
 
+// Static Vector2 objects to avoid per-render allocations
+const CHROMA_OFFSET = new THREE.Vector2(0.002, 0.002);
 function Scene({ vehiclesRef, pausedRef, statsAccRef, selectedVehicle, setSelectedVehicle }) {
-  const [glitchActive, setGlitchActive] = useState(false);
-  
   useFrame(() => {
-    const hasSus = vehiclesRef.current.some(v => v.suspicious);
-    if (hasSus !== glitchActive) setGlitchActive(hasSus);
+    // We removed the glitch effect because it conflicts with Bloom (convolution vs UV transform)
+    // Suspicious packets will still blink red in the InstancedVehicles component
   });
 
   return (
@@ -354,43 +367,79 @@ function Scene({ vehiclesRef, pausedRef, statsAccRef, selectedVehicle, setSelect
         <pointLight position={[0, 10, 0]} color="#ff0000" intensity={5} distance={200} />
       </group>
 
+      <Stars radius={100} depth={100} count={3000} factor={6} saturation={0} fade speed={2} />
+      <Sparkles count={300} scale={[150, 50, 150]} size={6} speed={0.4} opacity={0.4} color="#00f0ff" position={[0, 20, 0]} />
+      
       <Grid 
         infiniteGrid 
-        fadeDistance={400} 
-        cellColor="#00f0ff" 
+        fadeDistance={300} 
+        cellColor="#003040" 
         sectionColor="#00f0ff" 
-        cellSize={10} 
-        sectionSize={50} 
+        cellSize={20} 
+        sectionSize={100} 
         position={[0, -0.1, 0]}
+        cellThickness={0.5}
+        sectionThickness={1}
       />
       
       <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -0.2, 0]} receiveShadow>
         <planeGeometry args={[1000, 100]} />
-        <meshStandardMaterial color="#0a0a0a" roughness={0.8} />
+        <meshStandardMaterial color="#020205" roughness={0.9} />
       </mesh>
 
       <EffectComposerPP>
         <BloomPP luminanceThreshold={0.2} luminanceSmoothing={0.9} height={300} intensity={1.5} />
-        <ChromaticAberrationPP blendFunction={BlendFunction.NORMAL} offset={[0.002, 0.002]} />
-        <ScanlinePP blendFunction={BlendFunction.OVERLAY} density={1.5} />
-        {glitchActive && (
-          <GlitchPP
-            delay={[1.5, 3.5]}
-            duration={[0.1, 0.3]}
-            strength={[0.1, 0.3]}
-            mode={GlitchMode.SPORADIC}
-            active={glitchActive}
-          />
-        )}
+        <ChromaticAberrationPP blendFunction={BlendFunction.NORMAL} offset={CHROMA_OFFSET} />
       </EffectComposerPP>
     </>
   );
 }
 
+class Canvas3DErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, info) {
+    console.error('[Canvas3D] Render error:', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          width: '100%', height: '100%', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', background: '#050510', color: '#ff3355',
+          fontFamily: 'monospace', flexDirection: 'column', gap: '12px'
+        }}>
+          <div style={{ fontSize: '14px', fontWeight: 'bold' }}>⚠ 3D RENDERER ERROR</div>
+          <div style={{ fontSize: '11px', color: '#5a6080', maxWidth: '400px', textAlign: 'center' }}>
+            {this.state.error?.message || 'WebGL context lost or Three.js crash'}
+          </div>
+          <button
+            onClick={() => this.setState({ hasError: false, error: null })}
+            style={{
+              padding: '6px 16px', background: '#1a1a3a', border: '1px solid #00f5ff',
+              color: '#00f5ff', cursor: 'pointer', borderRadius: '4px', fontSize: '11px'
+            }}
+          >
+            RETRY
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function Canvas3D(props) {
   return (
-    <Canvas shadows camera={{ position: [0, 60, 120], fov: 45 }} gl={{ antialias: false }}>
-      <Scene {...props} />
-    </Canvas>
+    <Canvas3DErrorBoundary>
+      <Canvas shadows camera={{ position: [0, 60, 120], fov: 45 }} gl={{ antialias: false }}>
+        <Scene {...props} />
+      </Canvas>
+    </Canvas3DErrorBoundary>
   );
 }

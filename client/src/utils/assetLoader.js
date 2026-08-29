@@ -1,6 +1,5 @@
 const ASSETS = {
-  BICYCLE: '/vehicles/bicycle.png',
-  MOTORCYCLE: '/vehicles/motorcycle.png',
+  CYCLE: '/vehicles/bicycle.png',
   CAR: '/vehicles/sedan.png',
   TRUCK: '/vehicles/truck.png',
   BUS: '/vehicles/bus.png'

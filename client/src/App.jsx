@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { Network, Terminal, Settings, Play, Pause, ArrowDownLeft, ArrowUpRight, Activity, Box, X, Download, ShieldAlert, Volume2, VolumeX } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
@@ -121,11 +121,13 @@ function ManifestPanel({ vehicle, onClose }) {
 function AnalyticsPanel({ analytics, onClose }) {
   if (!analytics) return null;
 
+  const ps = analytics?.protocolStats || {};
+
   const data = [
-    { name: 'TCP', value: analytics.protocolStats.TCP || 0, color: '#00f0ff' },
-    { name: 'UDP', value: analytics.protocolStats.UDP || 0, color: '#ffaa00' },
-    { name: 'ICMP', value: analytics.protocolStats.ICMP || 0, color: '#a855f7' },
-    { name: 'OTHER', value: analytics.protocolStats.OTHER || 0, color: '#6b7280' },
+    { name: 'TCP', value: ps.TCP || 0, color: '#00f0ff' },
+    { name: 'UDP', value: ps.UDP || 0, color: '#ffaa00' },
+    { name: 'ICMP', value: ps.ICMP || 0, color: '#a855f7' },
+    { name: 'OTHER', value: ps.OTHER || 0, color: '#6b7280' },
   ].filter(d => d.value > 0);
 
   return (
@@ -282,7 +284,12 @@ function createVehicle(pkt, cw, ch) {
 // Audio System using Web Audio API
 class AudioEngine {
   constructor() {
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      console.warn('[Audio] AudioContext not available:', e.message);
+      this.ctx = null;
+    }
     this.enabled = false;
   }
   
@@ -525,9 +532,19 @@ export default function App() {
                 <div className='text-[10px] font-mono text-cyan uppercase tracking-widest flex items-center gap-1'>
                   <Terminal size={10} /> Active Interface
                 </div>
-                <div className='text-xs text-text truncate' title={captureInfo.device}>
-                  {captureInfo.device}
+                <div className='text-xs text-text truncate' title={captureInfo.interfaceDesc || captureInfo.interfaceName}>
+                  {captureInfo.interfaceDesc || captureInfo.interfaceName || 'Detecting...'}
                 </div>
+                {captureInfo.localIP && (
+                  <div className='text-[10px] font-mono text-muted truncate'>
+                    Local: {captureInfo.localIP}
+                  </div>
+                )}
+                {captureInfo.error && (
+                  <div className='text-[10px] font-mono text-red-400 truncate mt-1' title={captureInfo.error}>
+                    ⚠ {captureInfo.error.split('\n')[0]}
+                  </div>
+                )}
               </div>
             )}
           </div>
