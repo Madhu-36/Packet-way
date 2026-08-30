@@ -104,6 +104,13 @@ Caches up to 3,000 raw packets in an in-memory ring buffer, allowing security an
 - **[UPDATE]** **OS-Level IPS Integration:** Upgraded the "Soft-Drop" firewall to execute native Windows `netsh advfirewall` commands, blocking threats before they even reach the application layer.
 - **[UPDATE]** **CARBON AI Validation:** Passed a comprehensive AI Agentic Verification Test (92/100 Confidence Score) validating the DPI engine against live payload injection simulations.
 
+## 🔮 Future Works / Roadmap
+To further elevate this project to an enterprise production-grade standard, the following features are planned for future iterations:
+- **eBPF (Extended Berkeley Packet Filter) Migration:** Transitioning the packet capture engine from user-space `cap` to kernel-space `eBPF` for near-zero overhead, enabling hyper-scale Kubernetes node-level observability.
+- **Machine Learning Anomaly Detection:** Integrating TensorFlow.js to train baseline models on typical network behavior, flagging zero-day behavioral anomalies without relying purely on regex signatures.
+- **Encrypted Traffic Analysis (ETA):** Implementing JA3/JA4 TLS fingerprinting to categorize malicious actors and botnets even when payloads are fully encrypted.
+- **Dynamic Threat Intelligence Feeds:** Hooking into live MISP or AlienVault OTX APIs to automatically sync and drop known global threat IPs at the firewall level.
+
 ---
 
 ## 🚀 Getting Started
