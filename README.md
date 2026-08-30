@@ -13,9 +13,12 @@ Designed for high-capacity enterprise environments, it features an automated Int
 ---
 
 ## 🚀 Live Demo & Video Walkthrough
-*(Note: A live interactive demo and video walkthrough link will be added here once hosted via GitHub Pages/Vercel and YouTube).*
-- **Live Demo:** [Demo Link Pending]
-- **Video Walkthrough:** [YouTube Link Pending]
+- **Live Demo:** [PacketWay 3D Live Tunnel](https://packetway-demo.loca.lt) *(Note: Hosted via Localtunnel; requires the host machine to be online).*
+- **Video Walkthrough (Cyber Attack Simulation):** 
+
+<video src="https://github.com/Madhu-36/Packet-way/raw/main/demo_video.mp4" controls="controls" muted="muted" width="100%"></video>
+
+*(If the video embed does not load, [click here to download/watch the MP4 directly](https://github.com/Madhu-36/Packet-way/blob/main/demo_video.mp4)).*
 
 ---
 
