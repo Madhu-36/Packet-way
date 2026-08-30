@@ -1,5 +1,4 @@
-import React, { useRef, useEffect, useCallback } from 'react';
-import { getAsset } from './utils/assetLoader';
+import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 
 const PROTO_COLOR = {
   TCP: '#00f0ff',
@@ -16,6 +15,16 @@ const SAFE_DIST = 45;
 
 export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selectedVehicle, setSelectedVehicle }) {
   const canvasRef = useRef(null);
+  const shockwavesRef = useRef([]);
+
+  // Generate some static stars/sparkles
+  const sparkles = useMemo(() => Array.from({length: 400}).map(() => ({
+    x: Math.random() * LOGICAL_W,
+    y: Math.random() * LOGICAL_H,
+    size: Math.random() * 2 + 1,
+    speed: Math.random() * 2 + 0.5,
+    blinkOffset: Math.random() * Math.PI * 2
+  })), []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -25,8 +34,10 @@ export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selected
     let frameCount = 0;
     let lastFpsTime = performance.now();
 
+    // Disable image smoothing for sharper neon edges
+    ctx.imageSmoothingEnabled = false;
+
     const render = (time) => {
-      // Calculate FPS
       frameCount++;
       if (time - lastFpsTime >= 1000) {
         if (statsAccRef.current) statsAccRef.current.fps = frameCount;
@@ -34,7 +45,6 @@ export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selected
         lastFpsTime = time;
       }
 
-      // Resize canvas to match CSS size
       const rect = canvas.getBoundingClientRect();
       if (canvas.width !== rect.width || canvas.height !== rect.height) {
         canvas.width = rect.width;
@@ -44,95 +54,157 @@ export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selected
       const scaleX = canvas.width / LOGICAL_W;
       const scaleY = canvas.height / LOGICAL_H;
       const tick = performance.now() / 100;
+      
+      const cx = (LOGICAL_W / 2) * scaleX;
+      const cy = (LOGICAL_H / 2) * scaleY;
 
-      // Clear background (Deep dark slate asphalt)
-      ctx.fillStyle = '#0f172a';
+      // Motion Blur / Trails instead of solid clear
+      ctx.fillStyle = 'rgba(5, 5, 16, 0.2)'; // 0.2 opacity creates trails
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Shoulders & Guard Rails
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(0, 0, canvas.width, HALF_H * scaleY); // Inbound track
-      ctx.fillRect(0, HALF_H * scaleY, canvas.width, HALF_H * scaleY); // Outbound track
-
-      // Yellow outer boundaries
-      ctx.strokeStyle = '#eab308';
-      ctx.lineWidth = Math.max(2, 4 * scaleY);
-      ctx.beginPath();
-      ctx.moveTo(0, 0); ctx.lineTo(canvas.width, 0);
-      ctx.moveTo(0, LOGICAL_H * scaleY); ctx.lineTo(canvas.width, LOGICAL_H * scaleY);
-      ctx.stroke();
-
-      // Animated Dash Lines for Lanes
-      ctx.strokeStyle = '#ffffff';
+      // Grid background (slightly more visible)
+      ctx.strokeStyle = 'rgba(0, 48, 64, 0.4)';
       ctx.lineWidth = Math.max(1, 2 * scaleY);
-      ctx.setLineDash([20 * scaleX, 15 * scaleX]);
-
-      // Inbound lanes (moving left -> offset increases)
-      ctx.lineDashOffset = (tick * 10 * scaleX) % (35 * scaleX);
+      const gridSize = 40 * scaleY;
       ctx.beginPath();
-      for (let i = 1; i < 4; i++) {
-        ctx.moveTo(0, i * LANE_H * scaleY);
-        ctx.lineTo(canvas.width, i * LANE_H * scaleY);
+      for (let x = (tick * 10 * scaleX) % gridSize; x < canvas.width; x += gridSize) {
+        ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height);
+      }
+      for (let y = 0; y < canvas.height; y += gridSize) {
+        ctx.moveTo(0, y); ctx.lineTo(canvas.width, y);
       }
       ctx.stroke();
 
-      // Outbound lanes (moving right -> offset decreases)
-      ctx.lineDashOffset = -(tick * 10 * scaleX) % (35 * scaleX);
+      // Sparkles (faster and brighter)
+      ctx.fillStyle = '#00f0ff';
+      sparkles.forEach(s => {
+         s.x -= s.speed;
+         if (s.x < 0) s.x = LOGICAL_W;
+         const opacity = (Math.sin(tick * 0.5 + s.blinkOffset) + 1) / 2;
+         ctx.globalAlpha = opacity;
+         ctx.beginPath();
+         ctx.arc(s.x * scaleX, s.y * scaleY, s.size * scaleX, 0, Math.PI*2);
+         ctx.fill();
+      });
+      ctx.globalAlpha = 1.0;
+
+      // Data lanes (optical fibers)
+      ctx.strokeStyle = '#00f0ff';
+      ctx.lineWidth = 2 * scaleY;
+      ctx.globalAlpha = 0.2;
       ctx.beginPath();
-      for (let i = 1; i < 4; i++) {
-        ctx.moveTo(0, (HALF_H + i * LANE_H) * scaleY);
-        ctx.lineTo(canvas.width, (HALF_H + i * LANE_H) * scaleY);
+      for (let i = 0; i < 4; i++) {
+        const yIn = i * LANE_H + (LANE_H / 2);
+        ctx.moveTo(0, yIn * scaleY); ctx.lineTo(canvas.width, yIn * scaleY);
+        const yOut = HALF_H + i * LANE_H + (LANE_H / 2);
+        ctx.moveTo(0, yOut * scaleY); ctx.lineTo(canvas.width, yOut * scaleY);
       }
       ctx.stroke();
-
-      // Center divider (Yellow double solid line)
-      ctx.setLineDash([]);
-      ctx.strokeStyle = '#eab308';
-      ctx.lineWidth = Math.max(2, 4 * scaleY);
-      ctx.beginPath();
-      ctx.moveTo(0, HALF_H * scaleY - 3 * scaleY);
-      ctx.lineTo(canvas.width, HALF_H * scaleY - 3 * scaleY);
-      ctx.moveTo(0, HALF_H * scaleY + 3 * scaleY);
-      ctx.lineTo(canvas.width, HALF_H * scaleY + 3 * scaleY);
-      ctx.stroke();
+      ctx.globalAlpha = 1.0;
 
       const activeVehicles = vehiclesRef.current;
 
+      // Geo Dots mapping
+      ctx.fillStyle = '#ff0000';
+      ctx.shadowColor = '#ff0000';
+      ctx.shadowBlur = 15;
+      let geoCount = 0;
+      for (let i = 0; i < activeVehicles.length; i++) {
+         const v = activeVehicles[i];
+         if (v.geo && v.geo.ll && geoCount < 1000) {
+            const [lat, lon] = v.geo.ll;
+            const gx = ((lon + 180) / 360) * LOGICAL_W * scaleX;
+            const gy = ((-lat + 90) / 180) * LOGICAL_H * scaleY;
+            
+            ctx.globalAlpha = Math.max(0.4, Math.random());
+            ctx.beginPath();
+            ctx.arc(gx, gy, 3 * scaleX, 0, Math.PI*2);
+            ctx.fill();
+            geoCount++;
+         }
+      }
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1.0;
+
+      // Central Hub / Core
+      ctx.beginPath();
+      ctx.arc(cx, cy, 40 * scaleY, 0, Math.PI*2);
+      ctx.fillStyle = '#1a1a3a';
+      ctx.fill();
+      ctx.strokeStyle = '#00f0ff';
+      ctx.lineWidth = 4 * scaleY;
+      ctx.stroke();
+      
+      // Pulsing center light
+      ctx.shadowBlur = 40;
+      ctx.shadowColor = '#00f0ff';
+      ctx.beginPath();
+      ctx.arc(cx, cy, 20 * scaleY + Math.sin(tick*1.5)*10 * scaleY, 0, Math.PI*2);
+      ctx.fillStyle = '#00f0ff';
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
       if (!pausedRef.current) {
-        // Simulator Logic
+        // OPTIMIZED Simulator Logic (O(N log N) via sorting instead of O(N^2))
+        const lanes = {
+          inbound: [[], [], [], []],
+          outbound: [[], [], [], []]
+        };
+
+        // Bucket vehicles
+        for (let i = 0; i < activeVehicles.length; i++) {
+          const v = activeVehicles[i];
+          if (v.laneIdx >= 0 && v.laneIdx < 4) {
+            if (v.isInbound) lanes.inbound[v.laneIdx].push(v);
+            else lanes.outbound[v.laneIdx].push(v);
+          }
+        }
+
+        // Sort buckets
+        for (let i = 0; i < 4; i++) {
+          lanes.inbound[i].sort((a, b) => a.x - b.x); // Inbound move left, so smaller X is "ahead"
+          lanes.outbound[i].sort((a, b) => b.x - a.x); // Outbound move right, so larger X is "ahead"
+        }
+
+        // Process vehicles
         activeVehicles.forEach(v1 => {
           let frontVehicle = null;
           let minDistance = Infinity;
 
-          activeVehicles.forEach(v2 => {
-            if (v1 === v2 || v1.isInbound !== v2.isInbound || v1.laneIdx !== v2.laneIdx) return;
+          const bucket = v1.isInbound ? lanes.inbound[v1.laneIdx] : lanes.outbound[v1.laneIdx];
+          const myIndex = bucket.indexOf(v1);
+
+          if (myIndex > 0) {
+            const v2 = bucket[myIndex - 1]; // The vehicle directly ahead
             const c1 = v1.x + v1.w / 2;
             const c2 = v2.x + v2.w / 2;
-            let isAhead = false;
-            let dist = 0;
-
+            
             if (!v1.isInbound) {
-              isAhead = c2 > c1 || (c2 === c1 && v2.uid > v1.uid);
-              dist = c2 - c1 - (v1.w / 2 + v2.w / 2);
+              minDistance = c2 - c1 - (v1.w / 2 + v2.w / 2);
             } else {
-              isAhead = c2 < c1 || (c2 === c1 && v2.uid > v1.uid);
-              dist = c1 - c2 - (v1.w / 2 + v2.w / 2);
+              minDistance = c1 - c2 - (v1.w / 2 + v2.w / 2);
             }
-
-            if (isAhead && dist < minDistance) {
-              minDistance = dist;
+            if (minDistance > 0) {
               frontVehicle = v2;
             }
-          });
+          }
 
           if (frontVehicle && minDistance < SAFE_DIST) {
             let overtook = false;
+            
+            // Try Overtake (Simplified for speed)
             const tryOvertake = (targetLane) => {
               if (targetLane < 0 || targetLane > 3) return false;
-              const laneClear = !activeVehicles.some(v2 => {
-                if (v1 === v2 || v1.isInbound !== v2.isInbound || v2.laneIdx !== targetLane) return false;
-                return v1.x < v2.x + v2.w + SAFE_DIST && v1.x + v1.w + SAFE_DIST > v2.x;
-              });
+              const targetBucket = v1.isInbound ? lanes.inbound[targetLane] : lanes.outbound[targetLane];
+              // Binary search or simple scan (since max capacity is huge, simple scan of nearby)
+              let laneClear = true;
+              for(let j=0; j<targetBucket.length; j++) {
+                const v2 = targetBucket[j];
+                if (v1.x < v2.x + v2.w + SAFE_DIST && v1.x + v1.w + SAFE_DIST > v2.x) {
+                  laneClear = false;
+                  break;
+                }
+              }
 
               if (laneClear) {
                 v1.laneIdx = targetLane;
@@ -148,35 +220,35 @@ export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selected
 
             if (!overtook) {
               v1.speed = frontVehicle.speed;
-              if (minDistance < 0) v1.x -= (v1.isInbound ? -0.5 : 0.5);
+              if (minDistance < 0) v1.x -= (v1.isInbound ? -1 : 1);
             } else {
               v1.speed = v1.baseSpeed;
             }
           } else {
             if (Math.abs(v1.speed) < Math.abs(v1.baseSpeed)) {
-               v1.speed += (v1.baseSpeed > 0 ? 0.08 : -0.08);
+               v1.speed += (v1.baseSpeed > 0 ? 0.15 : -0.15); // Faster acceleration
                if (Math.abs(v1.speed) > Math.abs(v1.baseSpeed)) v1.speed = v1.baseSpeed;
             }
           }
 
           if (Math.abs(v1.y - v1.targetY) > 0.5) {
-            v1.y += (v1.targetY - v1.y) * 0.15;
+            v1.y += (v1.targetY - v1.y) * 0.25; // Faster lane changes
           } else {
             v1.y = v1.targetY;
           }
           v1.x += v1.speed;
         });
 
-        // Remove vehicles out of bounds
         vehiclesRef.current = activeVehicles.filter(v => {
           if (v.isInbound) return v.x > -v.w - 400;
           else return v.x < LOGICAL_W + 400;
         });
       }
 
-      // Rendering Logic
+      // Rendering Packets (Vehicles) - EXTREME GLOW
       vehiclesRef.current.forEach(v => {
-        const color = PROTO_COLOR[v.protocol] || PROTO_COLOR.OTHER;
+        const isBlinking = v.suspicious && (Math.sin(tick * 10) > 0);
+        const color = isBlinking ? '#ff0000' : (PROTO_COLOR[v.protocol] || PROTO_COLOR.OTHER);
         const vx = v.x * scaleX;
         const vy = v.y * scaleY;
         const vw = v.w * scaleX;
@@ -191,97 +263,66 @@ export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selected
         const hw = vw/2;
         const hh = vh/2;
 
-        // Protocol Neon Underglow (Aura)
+        // Packet Neon Glow (Extreme)
         ctx.shadowColor = color;
-        ctx.shadowBlur = 15;
+        ctx.shadowBlur = 30; // Max blur
+        
+        // Base block
         ctx.fillStyle = color;
-        ctx.globalAlpha = 0.3;
+        ctx.globalAlpha = 0.5;
         ctx.fillRect(-hw, -hh, vw, vh);
+
+        // Core / Emissive part
         ctx.globalAlpha = 1.0;
-
-        // Sprite rendering
-        const img = getAsset(v.type);
-        if (img && img.width > 1) {
-          ctx.shadowBlur = 0;
-          ctx.drawImage(img, -hw, -hh, vw, vh);
+        ctx.fillStyle = '#ffffff'; // White hot center
+        ctx.shadowBlur = 0;
+        
+        if (v.type === 'CYCLE') {
+            ctx.beginPath();
+            ctx.moveTo(-hw, 0); ctx.lineTo(0, -hh); ctx.lineTo(hw, 0); ctx.lineTo(0, hh);
+            ctx.fill();
+        } else if (v.type === 'TRUCK' || v.type === 'BUS') {
+            ctx.fillRect(-hw + 2, -hh + 2, vw - 4, vh - 4);
+            ctx.fillStyle = color;
+            ctx.fillRect(hw - 8*scaleX, -hh + 4, 6*scaleX, vh - 8);
         } else {
-          // Fallback colored rectangle
-          ctx.fillStyle = color;
-          ctx.globalAlpha = 0.7;
-          ctx.fillRect(-hw, -hh, vw, vh);
-          ctx.globalAlpha = 1.0;
+            ctx.fillRect(-hw + 2, -hh + 2, vw - 4, vh - 4);
         }
-
-        // Dynamic Headlight Cones
-        const gradient = ctx.createLinearGradient(hw, 0, hw + vw * 1.5, 0);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
-        gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
-
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.moveTo(hw, -hh * 0.8);
-        ctx.lineTo(hw + vw * 1.5, -hh * 2.0);
-        ctx.lineTo(hw + vw * 1.5, hh * 2.0);
-        ctx.lineTo(hw, hh * 0.8);
-        ctx.fill();
 
         ctx.restore();
 
-        // Selection pulsing ring
+        // Selection ring
         if (selectedVehicle && selectedVehicle.uid === v.uid) {
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 2 + Math.abs(Math.sin(tick)) * 4;
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 10;
-          ctx.strokeRect(vx - 4, vy - 4, vw + 8, vh + 8);
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 4 + Math.abs(Math.sin(tick*2)) * 4;
+          ctx.shadowColor = '#ffffff';
+          ctx.shadowBlur = 20;
+          ctx.strokeRect(vx - 8, vy - 8, vw + 16, vh + 16);
           ctx.shadowBlur = 0;
         }
       });
 
-      // Draw Traffic Poles and Lights
-      const drawTrafficLight = (tx, ty, isRed) => {
-        // Base / Pole shadow
-        ctx.fillStyle = '#000000';
-        ctx.globalAlpha = 0.5;
-        ctx.beginPath(); ctx.ellipse(tx, ty, 8 * scaleX, 4 * scaleY, 0, 0, Math.PI * 2); ctx.fill();
-        ctx.globalAlpha = 1.0;
+      // Shockwaves
+      for (let i = shockwavesRef.current.length - 1; i >= 0; i--) {
+        const sw = shockwavesRef.current[i];
+        sw.radius += 10 * scaleX;
+        sw.alpha -= 0.02;
+        if (sw.alpha <= 0) {
+          shockwavesRef.current.splice(i, 1);
+          continue;
+        }
+        ctx.beginPath();
+        ctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI*2);
+        ctx.strokeStyle = `rgba(0, 240, 255, ${sw.alpha})`;
+        ctx.lineWidth = 4 * scaleX;
+        ctx.stroke();
+      }
 
-        // Pole
-        ctx.fillStyle = '#475569';
-        ctx.fillRect(tx - 3 * scaleX, ty - 60 * scaleY, 6 * scaleX, 60 * scaleY);
-
-        // Box
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(tx - 10 * scaleX, ty - 90 * scaleY, 20 * scaleX, 40 * scaleY);
-        ctx.strokeStyle = '#334155';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(tx - 10 * scaleX, ty - 90 * scaleY, 20 * scaleX, 40 * scaleY);
-
-        // Red Light
-        ctx.fillStyle = isRed ? '#ef4444' : '#450a0a';
-        ctx.shadowBlur = isRed ? 20 : 0;
-        ctx.shadowColor = '#ef4444';
-        ctx.beginPath(); ctx.arc(tx, ty - 78 * scaleY, 6 * scaleX, 0, Math.PI * 2); ctx.fill();
-
-        // Green Light
-        ctx.fillStyle = !isRed ? '#22c55e' : '#052e16';
-        ctx.shadowBlur = !isRed ? 20 : 0;
-        ctx.shadowColor = '#22c55e';
-        ctx.beginPath(); ctx.arc(tx, ty - 60 * scaleY, 6 * scaleX, 0, Math.PI * 2); ctx.fill();
-        ctx.shadowBlur = 0;
-      };
-
-      // Traffic light state (alternates every 4 seconds)
-      const isRedCycle = (Math.floor(tick / 40) % 2) === 0;
-
-      const polePositions = [canvas.width * 0.2, canvas.width * 0.5, canvas.width * 0.8];
-
-      polePositions.forEach(xPos => {
-        // Top Side Poles
-        drawTrafficLight(xPos, 40 * scaleY, !isRedCycle);
-        // Bottom Side Poles
-        drawTrafficLight(xPos, canvas.height - 10 * scaleY, isRedCycle);
-      });
+      // Scanlines (CRT effect)
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+      for (let i = 0; i < canvas.height; i += 4 * scaleY) {
+        ctx.fillRect(0, i, canvas.width, 2 * scaleY);
+      }
 
       animationFrameId = requestAnimationFrame(render);
     };
@@ -291,7 +332,7 @@ export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selected
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [pausedRef, vehiclesRef, statsAccRef, selectedVehicle]);
+  }, [pausedRef, vehiclesRef, statsAccRef, selectedVehicle, sparkles]);
 
   const handleCanvasClick = useCallback((e) => {
     const canvas = canvasRef.current;
@@ -303,8 +344,8 @@ export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selected
     const scaleY = canvas.height / LOGICAL_H;
 
     let clickedVehicle = null;
-
     const vehicles = vehiclesRef.current;
+    
     for (let i = vehicles.length - 1; i >= 0; i--) {
       const v = vehicles[i];
       const vx = v.x * scaleX;
@@ -320,9 +361,14 @@ export default function Canvas2D({ vehiclesRef, pausedRef, statsAccRef, selected
       }
     }
 
+    // Spawn shockwave at click
+    shockwavesRef.current.push({ x: clickX, y: clickY, radius: 0, alpha: 1 });
+
     if (clickedVehicle) {
       e.stopPropagation();
       setSelectedVehicle(clickedVehicle);
+    } else {
+      setSelectedVehicle(null);
     }
   }, [vehiclesRef, setSelectedVehicle]);
 

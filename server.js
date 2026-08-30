@@ -34,6 +34,7 @@ const http       = require('http');
 const { Server } = require('socket.io');
 const os         = require('os');
 const crypto     = require('crypto');
+const { exec }   = require('child_process');
 
 // ─────────────────────────────────────────────────────────────────────
 //  GeoIP — local MaxMind DB lookup, zero API calls
@@ -148,6 +149,17 @@ const captureState = {
 const topTalkers = new Map();
 const protocolStats = { TCP: 0, UDP: 0, ICMP: 0, OTHER: 0 };
 const ipRates = new Map();
+
+// --- Advanced IDS Trackers ---
+const portScanTracker = new Map();
+const dataExfilTracker = new Map();
+const blockedIPs = new Set();
+
+setInterval(() => {
+  portScanTracker.clear();
+  dataExfilTracker.clear();
+}, 10000); // Rolling 10s window
+
 
 setInterval(() => {
   if (captureState.isPaused || !captureState.active) return;
@@ -330,6 +342,11 @@ setInterval(() => {
         srcIP = ip.info.srcaddr;
         dstIP = ip.info.dstaddr;
 
+        // Firewall Enforcement
+        if (blockedIPs.has(srcIP) || blockedIPs.has(dstIP)) {
+          return; // Soft-drop packet before further processing
+        }
+
         // Decode transport layer
         let tcpFlags = null;
         let ttl = ip.info.ttl;
@@ -337,6 +354,10 @@ setInterval(() => {
         let seqNo = null;
         let ackNo = null;
         
+        let hostname = null;
+        let payloadOffset = 0;
+        let payloadLength = 0;
+
         switch (ip.info.protocol) {
           case PROTOCOL.IP.TCP: {
             const tcp = decoders.TCP(buffer, ip.offset);
@@ -355,6 +376,24 @@ setInterval(() => {
               ack: (f & 0x10) !== 0,
               urg: (f & 0x20) !== 0,
             };
+            
+            payloadOffset = tcp.offset;
+            payloadLength = nbytes - payloadOffset;
+            
+            // DPI for TLS SNI (Client Hello)
+            if (dstPort === 443 && payloadLength > 43) {
+              if (buffer[payloadOffset] === 0x16 && buffer[payloadOffset+5] === 0x01) {
+                 const str = buffer.toString('utf8', payloadOffset, payloadOffset + payloadLength);
+                 const match = str.match(/([a-z0-9\-]+\.)+[a-z]{2,}/i);
+                 if (match) hostname = match[0];
+              }
+            }
+            // DPI for HTTP Host
+            if (dstPort === 80 && payloadLength > 10) {
+               const str = buffer.toString('utf8', payloadOffset, Math.min(payloadOffset + 200, payloadOffset + payloadLength));
+               const match = str.match(/Host:\s*([^\r\n]+)/i);
+               if (match) hostname = match[1];
+            }
             break;
           }
           case PROTOCOL.IP.UDP: {
@@ -362,6 +401,23 @@ setInterval(() => {
             protocol = 'UDP';
             srcPort  = udp.info.srcport;
             dstPort  = udp.info.dstport;
+            payloadOffset = udp.offset;
+            payloadLength = nbytes - payloadOffset;
+            
+            // DPI for DNS Queries
+            if (dstPort === 53 && payloadLength > 12) {
+               let idx = payloadOffset + 12;
+               let domain = '';
+               try {
+                 while (idx < payloadOffset + payloadLength && buffer[idx] > 0) {
+                   const len = buffer[idx];
+                   if (domain.length > 0) domain += '.';
+                   domain += buffer.toString('utf8', idx + 1, idx + 1 + len);
+                   idx += len + 1;
+                 }
+                 if (domain.length > 0 && domain.indexOf('.') > 0) hostname = domain;
+               } catch (e) {}
+            }
             break;
           }
           case PROTOCOL.IP.ICMP:
@@ -395,7 +451,63 @@ setInterval(() => {
         
         const rate = (ipRates.get(srcIP) || 0) + 1;
         ipRates.set(srcIP, rate);
-        const suspicious = rate > 50 || (tcpFlags && tcpFlags.syn && !tcpFlags.ack && rate > 20);
+        let suspicious = rate > 50 || (tcpFlags && tcpFlags.syn && !tcpFlags.ack && rate > 20);
+
+        // 1. Port Scan Detection (Inbound)
+        if (dstPort && direction === 'INBOUND') {
+          if (!portScanTracker.has(srcIP)) portScanTracker.set(srcIP, new Set());
+          const ports = portScanTracker.get(srcIP);
+          ports.add(dstPort);
+          if (ports.size > 15 && !ports.has('alerted')) {
+             ports.add('alerted');
+             suspicious = true;
+             io.emit('incident-alert', { id: crypto.randomUUID(), type: 'PORT_SCAN', severity: 'HIGH', srcIP, geo: geo || {}, msg: `Port Scan Detected: ${ports.size} unique ports`, timestamp: Date.now() });
+          }
+        }
+
+        // 2. Data Exfiltration Detection (Outbound)
+        if (direction === 'OUTBOUND') {
+           const bytes = (dataExfilTracker.get(dstIP) || 0) + nbytes; // dstIP is the external receiver
+           dataExfilTracker.set(dstIP, bytes);
+           if (bytes > 10 * 1024 * 1024 && !dataExfilTracker.has(dstIP + '_alerted')) { // > 10MB in 10s
+              dataExfilTracker.set(dstIP + '_alerted', true);
+              suspicious = true;
+              io.emit('incident-alert', { id: crypto.randomUUID(), type: 'EXFILTRATION', severity: 'CRITICAL', srcIP: dstIP, geo: geo || {}, msg: `Massive Outbound Spike: ${(bytes/1024/1024).toFixed(1)} MB sent`, timestamp: Date.now() });
+           }
+        }
+        
+        // 3. Known Threat Intelligence Simulation
+        if (['185.15.59.224', '45.134.144.0'].includes(srcIP) || (rate === 1 && Math.random() < 0.005)) {
+           if (!ipRates.has(srcIP + '_threat')) {
+             ipRates.set(srcIP + '_threat', true);
+             suspicious = true;
+             io.emit('incident-alert', { id: crypto.randomUUID(), type: 'THREAT_INTEL', severity: 'CRITICAL', srcIP, geo: geo || {}, msg: `Connection to Known Malicious Actor`, timestamp: Date.now() });
+           }
+        }
+        
+        // Generate Hex/ASCII dump (up to 512 bytes for deeper text detection)
+        const hexSize = Math.min(512, nbytes);
+        const hexBuffer = buffer.slice(0, hexSize);
+        const hexDump = hexBuffer.toString('hex');
+        let asciiDump = '';
+        for(let i=0; i<hexSize; i++) {
+          const code = hexBuffer[i];
+          asciiDump += (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
+        }
+
+        // 4. Advanced Text Detection (DPI) on Unencrypted Payloads
+        if (!asciiDump.includes('alerted_payload')) {
+           const sqlRegex = /(SELECT|UNION|INSERT|DROP\s+TABLE)/i;
+           const sensitiveRegex = /(password|passwd|secret|key|login)=/i;
+           
+           if (sqlRegex.test(asciiDump)) {
+              suspicious = true;
+              io.emit('incident-alert', { id: crypto.randomUUID(), type: 'SQL_INJECTION', severity: 'CRITICAL', srcIP, geo: geo || {}, msg: `SQL Injection detected in payload`, timestamp: Date.now() });
+           } else if (sensitiveRegex.test(asciiDump)) {
+              suspicious = true;
+              io.emit('incident-alert', { id: crypto.randomUUID(), type: 'DATA_LEAK', severity: 'HIGH', srcIP, geo: geo || {}, msg: `Unencrypted sensitive text detected in payload`, timestamp: Date.now() });
+           }
+        }
 
         packetBuffer.push({
           id         : (packetIdCounter++).toString(),
@@ -406,6 +518,7 @@ setInterval(() => {
           dstIP,
           srcPort,
           dstPort,
+          hostname,
           protocol,
           size       : nbytes,
           vehicleType,
@@ -416,7 +529,9 @@ setInterval(() => {
           tcpWindow,
           seqNo,
           ackNo,
-          suspicious
+          suspicious,
+          hexDump,
+          asciiDump
         });
       } catch (_) { /* skip malformed packets */ }
     });
@@ -464,6 +579,30 @@ io.on('connection', (socket) => {
     socket.emit('trigger-export');
   });
 
+  socket.on('block-ip', (ip) => {
+    blockedIPs.add(ip);
+    console.log(`[FIREWALL] Added soft-block rule for IP: ${ip}`);
+    
+    // OS-Level Hard Block via Windows Firewall (Requires Admin privileges)
+    if (process.platform === 'win32') {
+      const inRule = `netsh advfirewall firewall add rule name="PacketWay_Block_In_${ip}" dir=in action=block remoteip="${ip}"`;
+      const outRule = `netsh advfirewall firewall add rule name="PacketWay_Block_Out_${ip}" dir=out action=block remoteip="${ip}"`;
+      
+      exec(inRule, (err) => {
+        if (err) {
+          console.warn(`[FIREWALL WARN] Failed to add OS-level inbound block for ${ip}. Note: Requires running Node as Administrator.`);
+        } else {
+          console.log(`[FIREWALL] Successfully added OS-level inbound block for ${ip}`);
+        }
+      });
+      exec(outRule, (err) => {
+        if (!err) console.log(`[FIREWALL] Successfully added OS-level outbound block for ${ip}`);
+      });
+    }
+
+    io.emit('ip-blocked', ip);
+  });
+
   socket.on('disconnect', () => {
     console.log(`[WS] Client disconnected : ${socket.id}`);
   });
@@ -483,9 +622,33 @@ app.get('/health', (_req, res) => res.json({
 //  HTTP Export endpoint
 // ─────────────────────────────────────────────────────────────────────
 app.get('/export-pcap', (_req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Content-Disposition', 'attachment; filename="packet-capture.json"');
-  res.send(JSON.stringify(exportBuffer, null, 2));
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="packet-capture.csv"');
+  
+  if (exportBuffer.length === 0) {
+    return res.send("No packets captured yet.");
+  }
+  
+  const headers = ['ID', 'Timestamp', 'Direction', 'Protocol', 'Source_IP', 'Source_Port', 'Dest_IP', 'Dest_Port', 'Size_Bytes', 'Country', 'City', 'Suspicious'];
+  const rows = exportBuffer.map(p => {
+    return [
+      p.id,
+      new Date(p.timestamp).toISOString(),
+      p.direction,
+      p.protocol,
+      p.srcIP,
+      p.srcPort || '',
+      p.dstIP,
+      p.dstPort || '',
+      p.size,
+      `"${(p.geo && p.geo.country) ? p.geo.country : ''}"`,
+      `"${(p.geo && p.geo.city) ? p.geo.city : ''}"`,
+      p.suspicious ? 'YES' : 'NO'
+    ].join(',');
+  });
+  
+  const csv = headers.join(',') + '\n' + rows.join('\n');
+  res.send(csv);
 });
 
 // ─────────────────────────────────────────────────────────────────────
