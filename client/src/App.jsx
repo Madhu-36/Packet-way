@@ -6,9 +6,11 @@ import Canvas2D from './Canvas2D';
 import TopologyGraph from './TopologyGraph';
 import GlobeView from './GlobeView';
 
-const SERVER_URL = `http://${window.location.hostname}:3001`;
-// MAXIMIZED CAPACITY!
-const MAX_VEHICLES = 15000;
+// Use window.location.origin to support Localtunnel and Production deployments
+const SERVER_URL = window.location.origin;
+
+// OPTIMIZATION: Reduced MAX_VEHICLES to 2000 to save CPU and GPU draw calls.
+const MAX_VEHICLES = 2000;
 
 function StatBlock({ label, value, icon, accent, flash }) {
   return (

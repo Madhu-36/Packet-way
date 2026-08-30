@@ -489,11 +489,9 @@ setInterval(() => {
         const hexSize = Math.min(512, nbytes);
         const hexBuffer = buffer.slice(0, hexSize);
         const hexDump = hexBuffer.toString('hex');
-        let asciiDump = '';
-        for(let i=0; i<hexSize; i++) {
-          const code = hexBuffer[i];
-          asciiDump += (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
-        }
+        
+        // OPTIMIZATION: Use fast regex replacement instead of a manual for-loop
+        const asciiDump = hexBuffer.toString('binary').replace(/[\x00-\x1F\x7F-\xFF]/g, '.');
 
         // 4. Advanced Text Detection (DPI) on Unencrypted Payloads
         if (!asciiDump.includes('alerted_payload')) {
